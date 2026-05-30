@@ -6,8 +6,8 @@ _In-sample slice only (rebalance_date < OOS_START = 2023-12-02; the OOS window i
 
 - **Honest verdict (selection family): `suggestive`.**
 - Pre-registered selection family: **7 tests** (7 lookbacks at skip=1); Bonferroni threshold = 0.05 / 7 = 0.00714.
-- **Total tests run (selection + diagnostics): 21.**
-- Bonferroni survivors: `momentum_L5d_S1d`.
+- **Total mean-return tests (one per variant): 21.**
+- Bonferroni survivors: `momentum_L5d_S1d` **(DISQUALIFIED — fails §2.6 sign-stability; survives only via the bootstrap-override rule, HAC p=0.0081 > 0.00714)**.
 - Grid PBO/CSCV (probability of backtest overfitting): 0.114 (over 69 common in-sample dates).
 
 The **HAC** t-stat (Newey-West, autocorrelation-robust) is the reported mean-return test; the **naive** t-stat is shown but is biased (overstates significance) and is never the headline. Underpowered variants are labelled **inconclusive (underpowered)**, distinct from insignificant. On a Newey-West / bootstrap disagreement the **bootstrap** is the reported verdict.
