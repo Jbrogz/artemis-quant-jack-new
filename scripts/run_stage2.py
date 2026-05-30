@@ -534,14 +534,22 @@ def main() -> int:
     # --- Build the spanning regressors (in-sample only). ---
     holding = pd.read_parquet(RETURNS_PATH)
     holding["date"] = pd.to_datetime(holding["date"]).dt.normalize()
+    # OOS BOUNDARY: slice the holding panel to date < OOS_START before passing it
+    # to build_market_return / build_size_control. The last in-sample rebalance
+    # window uses the first OOS rebalance date as its *closing* boundary date
+    # (next_r), so without this slice _window_return would consume daily holding-
+    # return rows dated in [last_IS_rebalance, first_OOS_rebalance) — i.e. OOS-
+    # dated daily rows. Slicing here closes that spanning boundary nuance without
+    # changing any in-sample factor return or regressor value.
+    holding = holding[holding["date"] < OOS_START]
     universe = pd.read_parquet(UNIVERSE_PATH)
     universe["date"] = pd.to_datetime(universe["date"]).dt.normalize()
     mc_panel = build_mc_panel()
     print(f"  MC panel (offline cache)    : {mc_panel.shape[0]:,} rows, {mc_panel['symbol'].nunique()} symbols")
 
-    # Rebalance dates for the in-sample window plus the first OOS date as the
-    # closing window boundary, so the LAST in-sample window has a (r, next_r]
-    # span. The next_r boundary is a date only — no OOS factor return is read.
+    # Rebalance dates for the in-sample window plus the first OOS rebalance date
+    # as the closing boundary for the final IS window (next_r in the (r, next_r]
+    # convention). No OOS factor return is read; daily holding rows are pre-sliced.
     is_dates = sorted(factor_is["rebalance_date"].unique())
     all_dates = sorted(factor_all["rebalance_date"].unique())
     closing = [d for d in all_dates if d >= OOS_START]

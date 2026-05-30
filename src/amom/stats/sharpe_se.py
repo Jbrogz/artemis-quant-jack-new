@@ -120,6 +120,8 @@ def lo_sharpe_se(
     if t < 2:
         return float("nan"), float("nan"), False
     mean = float(r.mean())
+    # ddof=1 (sample std) — consistent with the naive t-stat and with Lo (2002)
+    # which derives the iid SE under the sample-mean / sample-std estimator.
     std = float(r.std(ddof=1))
     if not std > 0.0:
         return float("nan"), float("nan"), False
