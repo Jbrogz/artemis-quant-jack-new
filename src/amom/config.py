@@ -6,6 +6,8 @@ cmom are NOT copied (out of scope for the momentum factor book).
 """
 from pathlib import Path
 
+import pandas as pd
+
 # --- Paths ---
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -70,6 +72,38 @@ LAG_DAYS = 1
 # result. The 99 non-overlapping 30-day obs clear it; an overlapping series
 # whose effective n collapses below it is flagged underpowered.
 MIN_EFFECTIVE_N = 30
+
+# --- Out-of-sample reserve (spec §2.8 / guide §2.8) — SEALED ---------------
+# Before any Stage-2 statistic is computed, the most recent ~30% of rebalance
+# dates are set aside and sealed for a single Stage-4 evaluation. OOS_START is
+# the rebalance date at the 70th percentile of the (sorted, deduped) rebalance
+# dates of the built factor-return series — frozen here as a LITERAL constant,
+# never recomputed at runtime (so a later panel mutation cannot move the split).
+#
+# Derivation (recorded for provenance, not re-evaluated): the series has 99
+# non-overlapping monthly rebalance dates; sorted index 69 (= floor(0.70 * 99))
+# is 2023-12-02, giving 69 in-sample and 30 out-of-sample observations per
+# variant — the intended ~30% reserve. No Stage-2 code may read rows dated
+# >= OOS_START; that window is opened exactly once in Stage 4.
+OOS_START = pd.Timestamp("2023-12-02")
+
+
+def in_sample(df: pd.DataFrame, date_col: str = "rebalance_date") -> pd.DataFrame:
+    """In-sample slice: rows strictly before ``OOS_START`` (spec §2.8).
+
+    The out-of-sample window (``date_col >= OOS_START``) is sealed for the single
+    Stage-4 evaluation; every Stage-2 selection/estimation path must route its
+    input through this guard so no statistic can read an OOS row. Returns a
+    **copy** (immutable contract: the caller cannot mutate the source frame).
+
+    Args:
+        df: a frame carrying a rebalance-date column.
+        date_col: the name of that column (default ``"rebalance_date"``).
+
+    Returns:
+        A copy of ``df`` containing only rows with ``df[date_col] < OOS_START``.
+    """
+    return df.loc[df[date_col] < OOS_START].copy()
 
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and

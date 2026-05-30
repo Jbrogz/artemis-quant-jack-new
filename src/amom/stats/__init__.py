@@ -16,9 +16,11 @@ from amom.stats.sharpe_se import (
     lo_sharpe_se,
     maxlags_for,
 )
+from amom.stats.subsample import sign_stability
 
 __all__ = [
     "effective_n_and_power",
     "lo_sharpe_se",
     "maxlags_for",
+    "sign_stability",
 ]
