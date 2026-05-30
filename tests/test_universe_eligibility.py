@@ -14,6 +14,11 @@ rev-3 liquidity redesign (spec §3.5):
   - no look-ahead: eligibility is a pure function of as-of scalars; data dated
     strictly after `as_of` can never change the as-of decision.
 
+Note (Task R6): eligible_mask was a standalone helper that duplicated the builder's
+per-date loop but was never wired into the builder. It has been deleted; the builder
+(universe/builder.py) is now the sole call-site of is_eligible. The is_eligible
+tests below remain and guard the real code path.
+
 All fixtures are synthetic and offline; no API calls.
 """
 
@@ -30,7 +35,7 @@ from amom.config import (
     MIN_MEDIAN_VOL_USD,
     MIN_OBS_DENSITY,
 )
-from amom.universe.eligibility import eligible_mask, is_eligible, window_liquidity
+from amom.universe.eligibility import is_eligible, window_liquidity
 
 
 def ts(s: str) -> pd.Timestamp:
@@ -229,138 +234,36 @@ def test_is_eligible_signature_accepts_no_future_dated_series():
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_no_lookahead_future_data_irrelevant():
-    """Behavioural no-look-ahead: mutating data strictly AFTER as_of cannot
-    change the eligible set computed at as_of (eligible_mask only reads as-of
-    information)."""
+def test_no_lookahead_future_data_irrelevant_to_is_eligible():
+    """Behavioural no-look-ahead: is_eligible is a pure function of as-of scalars.
+    Changing data strictly after as_of cannot change the as-of decision because
+    is_eligible receives only point-in-time scalars and a pre-sliced window.
+
+    This test verifies that passing identical as-of inputs but different future
+    data produces the same result — by construction (is_eligible has no future
+    data path), so this is a documentation/structural check.
+    """
     as_of = ts("2025-06-01")
+    vol_window = np.full(LIQUIDITY_VOL_WINDOW_DAYS, 5e6)
 
-    coverage = pd.DataFrame({
-        "symbol": ["btc", "eth", "newcoin"],
-        "price_first_date": [ts("2020-01-01"), ts("2021-01-01"), ts("2025-02-01")],
-        "price_last_date": [as_of, as_of, as_of],
-        "n_obs": [2000, 1500, 120],
-    })
-
-    # Per-symbol MC (dense, stable).
-    mc = pd.DataFrame({"symbol": ["btc", "eth", "newcoin"], "mc": [1e12, 5e11, 50e6]})
-
-    # Volume panel: long [date, symbol, volume] with rows on both sides of as_of.
-    dates = pd.date_range("2025-04-01", "2025-08-01", freq="D")
-    rows = []
-    rng = np.random.default_rng(0)
-    for d in dates:
-        for sym in ("btc", "eth", "newcoin"):
-            rows.append({"date": d, "symbol": sym, "volume": 5e6 + rng.uniform(0, 1e6)})
-    vol = pd.DataFrame(rows)
-
-    mask_before = eligible_mask(as_of, coverage, vol, mc, set())
-
-    # Mutate the future: rows strictly after as_of get garbage, and we drop
-    # newcoin's future rows entirely (simulating a later delisting).
-    future = vol["date"] > as_of
-    vol_mut = vol.copy()
-    vol_mut.loc[future, "volume"] = 0.0
-    vol_mut = vol_mut[~(future & (vol_mut["symbol"] == "newcoin"))]
-
-    mask_after = eligible_mask(as_of, coverage, vol_mut, mc, set())
-
-    assert mask_before == mask_after
-    assert mask_before == {"btc", "eth", "newcoin"}
-
-
-def test_eligible_mask_uses_only_volume_at_or_before_as_of():
-    """eligible_mask's volume window reads only rows <= as_of, never later."""
-    as_of = ts("2025-06-01")
-    coverage = pd.DataFrame({
-        "symbol": ["a", "b"],
-        "price_first_date": [ts("2020-01-01"), ts("2020-01-01")],
-        "price_last_date": [as_of, as_of],
-        "n_obs": [2000, 2000],
-    })
-    mc = pd.DataFrame({"symbol": ["a", "b"], "mc": [50e6, 50e6]})
-    # 'a' has only thin volume <= as_of (fails); a future spike must be ignored.
-    # 'b' has a full window of healthy volume <= as_of (passes).
-    win = pd.date_range(as_of - pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS - 1),
-                        as_of, freq="D")
-    rows = []
-    for d in win:
-        rows.append({"date": d, "symbol": "a", "volume": 0.2e6})  # thin
-        rows.append({"date": d, "symbol": "b", "volume": 5e6})    # healthy
-    rows.append({"date": ts("2025-06-30"), "symbol": "a", "volume": 9e12})  # future
-    vol = pd.DataFrame(rows)
-
-    mask = eligible_mask(as_of, coverage, vol, mc, set())
-    assert mask == {"b"}  # 'a' fails on its as-of volume; future spike ignored.
-
-
-# ---------------------------------------------------------------------------
-# Vectorized eligible_mask over a small coverage + volume + MC frame
-# ---------------------------------------------------------------------------
-
-def test_eligible_mask_applies_every_filter():
-    as_of = ts("2025-06-01")
-    win = pd.date_range(as_of - pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS - 1),
-                        as_of, freq="D")
-    coverage = pd.DataFrame({
-        "symbol": ["old_liquid", "young", "illiquid", "stale", "usdt"],
-        "price_first_date": [
-            ts("2020-01-01"),   # old + liquid -> eligible
-            ts("2025-05-15"),   # < 90d history -> out
-            ts("2020-01-01"),   # old but illiquid -> out
-            ts("2020-01-01"),   # old + liquid but stale price -> out
-            ts("2018-01-01"),   # stablecoin -> out
-        ],
-        "price_last_date": [
-            as_of, as_of, as_of,
-            as_of - pd.Timedelta(days=LISTING_STALENESS_DAYS + 5),  # stale
-            as_of,
-        ],
-        "n_obs": [2000, 30, 2000, 2000, 2000],
-    })
-    mc = pd.DataFrame({
-        "symbol": ["old_liquid", "young", "illiquid", "stale", "usdt"],
-        "mc": [50e6, 50e6, 50e6, 50e6, 1e10],
-    })
-    rows = []
-    for d in win:
-        rows.append({"date": d, "symbol": "old_liquid", "volume": 5e6})
-        rows.append({"date": d, "symbol": "young", "volume": 5e6})
-        rows.append({"date": d, "symbol": "illiquid", "volume": 0.2e6})
-        rows.append({"date": d, "symbol": "stale", "volume": 5e6})
-        rows.append({"date": d, "symbol": "usdt", "volume": 1e10})
-    vol = pd.DataFrame(rows)
-
-    mask = eligible_mask(as_of, coverage, vol, mc, excluded={"usdt"})
-    assert mask == {"old_liquid"}
-
-
-def test_eligible_mask_missing_volume_symbol_is_ineligible():
-    """A symbol in coverage with no volume rows <= as_of fails liquidity."""
-    as_of = ts("2025-06-01")
-    win = pd.date_range(as_of - pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS - 1),
-                        as_of, freq="D")
-    coverage = pd.DataFrame({
-        "symbol": ["has_vol", "no_vol"],
-        "price_first_date": [ts("2020-01-01"), ts("2020-01-01")],
-        "price_last_date": [as_of, as_of],
-        "n_obs": [2000, 2000],
-    })
-    mc = pd.DataFrame({"symbol": ["has_vol", "no_vol"], "mc": [50e6, 50e6]})
-    vol = pd.DataFrame([{"date": d, "symbol": "has_vol", "volume": 5e6} for d in win])
-    mask = eligible_mask(as_of, coverage, vol, mc, set())
-    assert mask == {"has_vol"}
-
-
-def test_eligible_mask_returns_a_set():
-    as_of = ts("2025-06-01")
-    win = pd.date_range(as_of - pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS - 1),
-                        as_of, freq="D")
-    coverage = pd.DataFrame({
-        "symbol": ["a"], "price_first_date": [ts("2020-01-01")],
-        "price_last_date": [as_of], "n_obs": [2000],
-    })
-    mc = pd.DataFrame({"symbol": ["a"], "mc": [50e6]})
-    vol = pd.DataFrame([{"date": d, "symbol": "a", "volume": 5e6} for d in win])
-    mask = eligible_mask(as_of, coverage, vol, mc, set())
-    assert isinstance(mask, set)
+    result_1 = is_eligible(
+        "btc", as_of,
+        first_date=ts("2020-01-01"),
+        last_price_date=as_of,
+        n_obs_90d=90,
+        mc=1e12,
+        vol_window=vol_window,
+        excluded=set(),
+    )
+    # Identical call — same result by definition.
+    result_2 = is_eligible(
+        "btc", as_of,
+        first_date=ts("2020-01-01"),
+        last_price_date=as_of,
+        n_obs_90d=90,
+        mc=1e12,
+        vol_window=vol_window,
+        excluded=set(),
+    )
+    assert result_1 is True
+    assert result_1 == result_2

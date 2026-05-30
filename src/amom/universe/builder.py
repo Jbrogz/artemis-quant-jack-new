@@ -53,6 +53,7 @@ _OUTPUT_COLUMNS = [
     "adv_30d",
     "price_last_date",
     "delisted_asof",
+    "left_censored",
     "gated",
 ]
 
@@ -178,12 +179,34 @@ def build_universe_history(
         per (date, symbol) for every symbol ever seen, sorted by (date, symbol).
         ``eligible`` and ``gated`` are bool; ``adv_30d`` is float.
     """
-    dates = pd.DatetimeIndex(dates)
+    dates = pd.DatetimeIndex(dates).normalize()
+
+    # Normalize ingest boundaries: strip intraday timestamps so half-open
+    # (<= date) comparisons are robust to any intraday API delivery.
+    price_panel = price_panel.copy()
+    price_panel["date"] = price_panel["date"].dt.normalize()
+    volume_panel = volume_panel.copy()
+    volume_panel["date"] = volume_panel["date"].dt.normalize()
+    mc_panel = mc_panel.copy()
+    mc_panel["date"] = mc_panel["date"].dt.normalize()
 
     coverage = first_seen_dates(price_panel)
     first_by_symbol = dict(
         zip(coverage["symbol"], coverage["price_first_date"], strict=True)
     )
+
+    # Left-censoring: the pull-start is the earliest date in the price panel.
+    # An asset whose first observed price equals the pull-start may have listed
+    # before the pull window began — its true listing date is unknown.
+    if not price_panel.empty:
+        pull_start = price_panel["date"].min()
+    else:
+        pull_start = pd.NaT
+    left_censored_symbols: set[str] = set()
+    if pd.notna(pull_start):
+        for sym, first_date in first_by_symbol.items():
+            if pd.notna(first_date) and first_date == pull_start:
+                left_censored_symbols.add(sym)
 
     symbols = sorted(
         set(price_panel["symbol"]).union(volume_panel["symbol"])
@@ -217,7 +240,9 @@ def build_universe_history(
             # collapsed). A coin with no price at or before d (NaT) has simply
             # not listed yet, so it is not delisted. Uses only data <= d.
             delisted = pd.notna(last_date) and (d - last_date) > staleness
-            rows.append((d, sym, eligible, adv, last_date, delisted))
+            # Left-censoring: true listing date unknown if first price == pull-start.
+            censored = sym in left_censored_symbols
+            rows.append((d, sym, eligible, adv, last_date, delisted, censored))
 
     panel = pd.DataFrame(
         rows,
@@ -228,12 +253,14 @@ def build_universe_history(
             "adv_30d",
             "price_last_date",
             "delisted_asof",
+            "left_censored",
         ],
     )
     panel["eligible"] = panel["eligible"].astype(bool)
     panel["adv_30d"] = panel["adv_30d"].astype(float)
     panel["price_last_date"] = pd.to_datetime(panel["price_last_date"])
     panel["delisted_asof"] = panel["delisted_asof"].astype(bool)
+    panel["left_censored"] = panel["left_censored"].astype(bool)
 
     # Point-in-time min-universe gate: per date, gated iff too few eligible.
     eligible_counts = panel.groupby("date")["eligible"].transform("sum")
