@@ -14,6 +14,10 @@ CACHE_DIR = DATA_DIR / "cache"
 # --- Artemis API ---
 ARTEMIS_BASE_URL = "https://data-svc.artemisxyz.com/data/api"
 
+# --- Point-in-time eligibility thresholds (guide §1.1, spec §4 Stage 1.1) ---
+MIN_HISTORY_DAYS = 90              # min price history, in days, to be eligible
+MIN_ADV_USD = 1_000_000           # min trailing-30d average daily volume, USD
+
 # Market metrics used in all provider calls for the momentum factor
 MARKET_METRICS = ("PRICE", "MC", "FDMC", "24H_VOLUME", "30D_VOLUME")
 
