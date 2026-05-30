@@ -117,7 +117,7 @@ def split_recycled(
         # Assign a segment id by counting how many boundaries precede each row.
         bounds = [0, *starts, len(g)]
         relabeled = g.copy()
-        seg_symbols = relabeled["symbol"].to_numpy(dtype=object)
+        seg_symbols = relabeled["symbol"].to_numpy(dtype=object).copy()
         for seg_idx in range(len(bounds) - 1):
             lo, hi = bounds[seg_idx], bounds[seg_idx + 1]
             seg_symbols[lo:hi] = f"{symbol}__seg{seg_idx}"
