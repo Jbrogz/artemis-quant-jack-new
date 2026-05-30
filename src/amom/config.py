@@ -50,6 +50,18 @@ LOOKBACKS_DAYS = (1, 3, 5, 7, 14, 28, 56)   # 7 lookbacks, frozen
 PRIMARY_SKIP_DAYS = 1
 ROBUSTNESS_SKIPS = (2, 3)
 
+# --- Portfolio formation grid (spec §1.4; fixed by convention, NOT tuned) ---
+# Quintile sort: long top QUANTILE, short bottom QUANTILE, equal-weight within
+# each leg, dollar-neutral (Σ weights = 0). factor_return = long_leg − short_leg.
+QUANTILE = 0.20                   # top/bottom 20% (quintile sort)
+# Canonical one-month hold (spec §1.4 / guide §1.4). The factor-return series is
+# a per-rebalance series; each holding window spans HOLDING_DAYS grid days.
+HOLDING_DAYS = 30
+# No-look-ahead execution lag (spec §3.2, §7): the signal computed through close
+# t drives the trade entered at close t+1, i.e. the signal used at rebalance
+# date r is the one dated r − LAG_DAYS; the holding window is (r, r+HOLDING_DAYS].
+LAG_DAYS = 1
+
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
 # FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
