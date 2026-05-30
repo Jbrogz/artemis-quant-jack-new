@@ -121,6 +121,24 @@ SLIPPAGE_SMALL_BPS = 15            # base slippage (bps) for smaller / illiquid 
 SLIPPAGE_TOP_N = 30                # liquidity-rank cutoff: rank < N is the top tier
 SLIPPAGE_ADV_REF = 0.01            # order/ADV reference: base bps applies at this ratio
 
+# --- Backtest book caps + vol target (Stage 4, spec §4.1 / §3.5; by convention) ---
+# Gross leverage cap: the sum of |position weight| across coins may not exceed
+# this. 2.0 (a 1x-long / 1x-short dollar-neutral book) sits at the bottom of the
+# guide's 2-3x band, pinned by convention — NOT tuned to a backtest (spec §3.6).
+GROSS_LEVERAGE_CAP = 2.0
+# Per-coin cap: no single coin's |weight| may exceed this fraction of the book.
+# A loose 20% cap that almost never binds on a quintile book (equal-weight legs
+# of >=3 names cap at 1/3), present to bound concentration if a leg is thin.
+PER_COIN_CAP = 0.20
+# Annual vol target the book is scaled to (spec §3.5): the walk-forward vol
+# scalar multiplies the raw dollar-neutral weights so the book's trailing
+# realized vol annualizes to this. Pinned by convention, not tuned.
+ANNUAL_VOL_TARGET = 0.20
+# Trailing window (in rebalance periods) for the realized-vol estimate that
+# drives the vol scalar. Walk-forward: only periods <= t enter. A conventional
+# ~1y window at the 30-day cadence (~12 periods/yr); not Sharpe-maximized.
+VOL_TARGET_LOOKBACK = 12
+
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
 # FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
