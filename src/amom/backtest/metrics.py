@@ -61,22 +61,38 @@ def _sortino(returns: pd.Series, periods_per_year: float) -> float:
 def _annual_turnover(
     trades: pd.DataFrame,
     equity: pd.DataFrame,
-    n_periods: int,
     periods_per_year: float,
 ) -> float:
-    """Annualized one-way turnover = Σ|traded notional| / book / period * ppy.
+    """Annualized one-way turnover = mean per-period (Σ|traded notional| / equity) * ppy.
 
-    Turnover is read straight from the trade log: the total traded notional over
-    the run, normalized by the book size (the opening equity) and the number of
-    realized periods, then annualized. With no priced periods turnover is 0.0.
+    Each rebalance's traded notional is normalized by the equity **at that
+    rebalance** (the equity row dated at the rebalance), so turnover is the mean
+    per-period traded fraction of the then-current book — path-independent: a 1x
+    and a 2x cost run trade the same weight fractions on different equity paths
+    yet report the same turnover. (The old constant-``book0`` divisor made
+    turnover drift with the cost-eroded equity path.) With no priced periods
+    turnover is 0.0.
     """
-    if trades.empty or n_periods <= 0 or equity.empty:
+    if trades.empty or equity.empty:
         return 0.0
-    book = float(equity["equity"].iloc[0])
-    if book <= 0.0:
+    # equity at each rebalance date (the book the rebalance's orders trade against).
+    equity_by_date = (
+        equity.drop_duplicates(subset="date", keep="first")
+        .set_index("date")["equity"]
+        .astype(float)
+    )
+    traded_by_date = trades.groupby("rebalance_date")["traded_notional"].apply(
+        lambda n: float(n.abs().sum())
+    )
+    period_fracs = []
+    for d, traded in traded_by_date.items():
+        book = float(equity_by_date.get(d, float("nan")))
+        if not np.isfinite(book) or book <= 0.0:
+            continue
+        period_fracs.append(traded / book)
+    if not period_fracs:
         return 0.0
-    total_traded = float(trades["traded_notional"].abs().sum())
-    return total_traded / book / n_periods * periods_per_year
+    return float(np.mean(period_fracs)) * periods_per_year
 
 
 def performance(
@@ -128,7 +144,7 @@ def performance(
         "hit_rate": float((r > 0.0).mean()) if n >= 1 else float("nan"),
         "avg_win": float(winners.mean()) if not winners.empty else float("nan"),
         "avg_loss": float(losers.mean()) if not losers.empty else float("nan"),
-        "annual_turnover": _annual_turnover(trades, equity, n, periods_per_year),
+        "annual_turnover": _annual_turnover(trades, equity, periods_per_year),
     }
 
 

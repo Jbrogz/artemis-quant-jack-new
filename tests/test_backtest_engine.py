@@ -222,32 +222,67 @@ def test_per_coin_cap_binds():
 # no look-ahead: the vol scalar uses ONLY trailing (<= t) data
 # ---------------------------------------------------------------------------
 
+def _mutate_long_book_returns(window_overrides: dict[int, float]) -> pd.DataFrame:
+    """Long-book returns with the LONG leg of chosen window indices overridden.
+
+    ``window_overrides`` maps a priced-window index ``i`` (the window
+    ``(_REB_LONG[i], _REB_LONG[i+1]]``, closing at ``_REB_LONG[i+1]``) to a new
+    long-leg return; every other window keeps the baseline wiggle. Shorts stay
+    flat. This lets a test perturb exactly one window — past or future — relative
+    to a target rebalance and observe whether that rebalance's vol scalar moved.
+    """
+    base_wiggle = [0.004, 0.006, 0.005, 0.007, 0.004, 0.006, 0.005]
+    rows = []
+    for i in range(len(_REB_LONG) - 1):
+        end = _REB_LONG[i + 1]
+        long_ret = window_overrides.get(i, base_wiggle[i])
+        for s in _LONGS:
+            rows.append({"date": end, "symbol": s, "holding_return": long_ret})
+        for s in _SHORTS:
+            rows.append({"date": end, "symbol": s, "holding_return": 0.001})
+    return _holding_returns(rows)
+
+
 def test_vol_scalar_uses_only_trailing_data():
-    weights = _simple_weights()
-    universe = _universe(_REB, _SYMS)
-    base = _run(weights, _simple_returns(), universe)
+    # The 3rd rebalance (index 2, at _REB_LONG[2]) is the FIRST rebalance whose
+    # walk-forward vol scalar is genuinely ACTIVE: it consumes the two closed
+    # windows before it (book_returns[0] from window 0 closing at _REB_LONG[1],
+    # book_returns[1] from window 1 closing at _REB_LONG[2]), so the scalar there
+    # is != 1.0 and levers the book toward the cap. Asserting at this rebalance —
+    # not the hardcoded-1.0 first one — makes the no-look-ahead claim non-vacuous.
+    weights = _long_book_weights()
+    universe = _universe(_REB_LONG, _SYMS_LONG)
+    target_r = _REB_LONG[2]
 
-    # Mutate ONLY the SECOND window's returns (dates strictly after the first
-    # rebalance's pricing window). The first rebalance's executed weights — set
-    # from data <= the first rebalance — must be byte-for-byte unchanged.
-    mutated = _simple_returns(
-        b_returns={
-            "2024-02-15": 0.04,  # window-1 dates unchanged
-            "2024-03-01": 0.06,
-            "2024-03-15": -0.95,  # window-2 garbage (a future crash)
-            "2024-04-01": 9.9,
-        }
+    base = _run(weights, _long_book_returns(), universe, vol_target=0.20)
+
+    # The scalar at the target rebalance must genuinely differ from 1.0 (gross
+    # != raw), else any equality assertion below is trivially satisfied.
+    base_pos = base["positions"][base["positions"]["rebalance_date"] == target_r]
+    base_gross = float(base_pos["weight"].abs().sum())
+    assert abs(base_gross - 1.0) > 1e-6, "vol scalar is inactive — test is vacuous"
+
+    def weights_at(res):
+        sel = res["positions"][res["positions"]["rebalance_date"] == target_r]
+        return sel.set_index("symbol")["weight"].sort_index()
+
+    # --- No-look-ahead: mutating a FUTURE window (index 3, closing AFTER the
+    #     target rebalance at _REB_LONG[3]) must NOT touch the target's weights. -
+    future = _run(
+        weights, _mutate_long_book_returns({3: -0.95}), universe, vol_target=0.20
     )
-    mutated_res = _run(weights, mutated, universe)
+    pd.testing.assert_series_equal(weights_at(base), weights_at(future))
 
-    first_r = _REB[0]
-    base_first = base["positions"][base["positions"]["rebalance_date"] == first_r]
-    mut_first = mutated_res["positions"][
-        mutated_res["positions"]["rebalance_date"] == first_r
-    ]
-    base_w = base_first.set_index("symbol")["weight"].sort_index()
-    mut_w = mut_first.set_index("symbol")["weight"].sort_index()
-    pd.testing.assert_series_equal(base_w, mut_w)
+    # --- Positive control: mutating a PAST window (index 0, closing at
+    #     _REB_LONG[1] <= the target rebalance) feeds book_returns[0], so it MUST
+    #     change the target rebalance's scalar and hence its weights. A test that
+    #     fails to react to in-window data is not discriminating. ---------------
+    past = _run(
+        weights, _mutate_long_book_returns({0: 0.25}), universe, vol_target=0.20
+    )
+    base_w = weights_at(base)
+    past_w = weights_at(past)
+    assert not base_w.equals(past_w), "past-window mutation did not move the scalar"
 
 
 # ---------------------------------------------------------------------------

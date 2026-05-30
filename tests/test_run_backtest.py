@@ -113,6 +113,52 @@ def test_combined_multi_spec_oos_read_is_single_path():
         rb.read_oos_once(combined, guard)
 
 
+def test_oos_panels_read_in_one_guarded_call_covers_returns_and_universe():
+    # The OOS engine runs must NOT receive full panels and read OOS-dated daily
+    # returns / universe rows "by convention". A single guarded read returns the
+    # OOS slices of ALL THREE inputs (book by rebalance_date, returns + universe
+    # by date), so OOS-once is ENFORCED across every input, not just the book.
+    book = pd.DataFrame(
+        {
+            "rebalance_date": [ts("2023-11-02"), ts("2023-12-02"), ts("2024-01-01")],
+            "symbol": ["A", "A", "A"],
+            "weight": [0.1, 0.2, 0.3],
+            "_spec": ["primary"] * 3,
+        }
+    )
+    returns = pd.DataFrame(
+        {
+            "date": [ts("2023-11-15"), ts("2023-12-15"), ts("2024-01-15")],
+            "symbol": ["A", "A", "A"],
+            "holding_return": [0.01, 0.02, 0.03],
+        }
+    )
+    universe = pd.DataFrame(
+        {
+            "date": [ts("2023-11-02"), ts("2023-12-02"), ts("2024-01-01")],
+            "symbol": ["A", "A", "A"],
+            "adv_30d": [1e9, 1e9, 1e9],
+        }
+    )
+    guard = rb.OneShotOOS()
+    oos_book, oos_returns, oos_universe = rb.read_oos_panels_once(
+        book, returns, universe, guard
+    )
+    # The guard is spent EXACTLY ONCE for all three reads.
+    assert guard.open_count == 1
+    # Every returned slice is OOS-only — no row dated < OOS_START leaks in, and
+    # (critically) no OOS-dated returns/universe row is read outside this path.
+    assert (oos_book["rebalance_date"] >= OOS_START).all()
+    assert (oos_returns["date"] >= OOS_START).all()
+    assert (oos_universe["date"] >= OOS_START).all()
+    assert len(oos_book) == 2
+    assert len(oos_returns) == 2
+    assert len(oos_universe) == 2
+    # A second guarded read raises — the window is provably spent once.
+    with pytest.raises(RuntimeError):
+        rb.read_oos_panels_once(book, returns, universe, guard)
+
+
 def test_in_sample_slice_never_touches_oos_rows():
     df = pd.DataFrame(
         {
@@ -196,6 +242,58 @@ def test_gross_ge_net_on_a_real_run():
     gross_eq, net_eq = rb.run_gross_and_net(book, holding, universe, aum=1_000_000.0)
     # Friction can only subtract: terminal net equity <= gross terminal equity.
     assert net_eq["equity"].iloc[-1] <= gross_eq["equity"].iloc[-1] + 1e-6
+
+
+# ---------------------------------------------------------------------------
+# capacity candidate uses the per-rebalance TRADED delta, not mean |held weight|
+# ---------------------------------------------------------------------------
+
+def test_capacity_candidate_uses_traded_delta_not_held_weight():
+    # Two coins, three rebalances. The book is held roughly flat each rebalance
+    # (mean |held weight| ~= 0.5 per coin -> summed = 1.0), but the TRADED delta
+    # per rebalance is far smaller because the standing book is re-established,
+    # not re-traded in full. The candidate must reflect the order size that is
+    # actually executed (Σ |Δw| / n_rebalances per coin), NOT the held weight.
+    reb = [ts("2024-01-01"), ts("2024-02-01"), ts("2024-03-01")]
+    book = pd.DataFrame(
+        [
+            {"rebalance_date": reb[0], "symbol": "A", "weight": 0.5},
+            {"rebalance_date": reb[0], "symbol": "B", "weight": -0.5},
+            {"rebalance_date": reb[1], "symbol": "A", "weight": 0.5},
+            {"rebalance_date": reb[1], "symbol": "B", "weight": -0.5},
+        ]
+    )
+    # A trade log where the FIRST rebalance trades the full target from flat, but
+    # the SECOND barely trades (the book is re-established): per-coin traded
+    # fractions are (0.5 + 0.02) and (0.5 + 0.02) over 2 priced rebalances ->
+    # mean per-rebalance |Δw| = 0.26 each; summed one-way turnover = 0.52.
+    trades = pd.DataFrame(
+        [
+            {"rebalance_date": reb[0], "symbol": "A", "traded_weight": 0.5,
+             "traded_notional": 0.0, "cost": 0.0},
+            {"rebalance_date": reb[0], "symbol": "B", "traded_weight": -0.5,
+             "traded_notional": 0.0, "cost": 0.0},
+            {"rebalance_date": reb[1], "symbol": "A", "traded_weight": 0.02,
+             "traded_notional": 0.0, "cost": 0.0},
+            {"rebalance_date": reb[1], "symbol": "B", "traded_weight": -0.02,
+             "traded_notional": 0.0, "cost": 0.0},
+        ]
+    )
+    universe = pd.DataFrame(
+        [
+            {"date": reb[0], "symbol": "A", "adv_30d": 1e8},
+            {"date": reb[0], "symbol": "B", "adv_30d": 1e8},
+        ]
+    )
+    cand = rb._candidate_for_capacity(universe, trades, gross_expected_return=0.01)
+    summed_traded = sum(frac for frac, _adv, _rank in cand["coins"])
+    # Per coin: (0.5 + 0.02) / 2 priced rebalances = 0.26 each -> summed = 0.52.
+    assert abs(summed_traded - 0.52) < 1e-9
+    # And it is strictly BELOW the (wrong) mean |held weight| sum of 1.0 — the
+    # traded order is smaller than the standing book, which is the whole point.
+    mean_held = float(book.groupby("symbol")["weight"].apply(lambda w: w.abs().mean()).sum())
+    assert summed_traded < mean_held
+    assert cand["gross_expected_return"] == 0.01
 
 
 # ---------------------------------------------------------------------------

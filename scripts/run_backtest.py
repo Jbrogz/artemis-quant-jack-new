@@ -126,17 +126,45 @@ def in_sample_slice(df: pd.DataFrame, date_col: str = "rebalance_date") -> pd.Da
     return df.loc[df[date_col] < OOS_START].copy()
 
 
+def _oos_slice(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    """Pure OOS slice (rows ``>= OOS_START``) — does NOT touch the guard."""
+    return df.loc[df[date_col] >= OOS_START].copy()
+
+
 def read_oos_once(
     df: pd.DataFrame, guard: OneShotOOS, date_col: str = "rebalance_date"
 ) -> pd.DataFrame:
     """Return the OOS slice (rows ``>= OOS_START``), spending the single-use guard.
 
-    This is the **only** code path that reads OOS-dated rows; ``guard.open()``
-    raises if the window has already been spent, so a second OOS read is a hard
-    error rather than a silent leak (spec §2.8 / §4.6).
+    ``guard.open()`` raises if the window has already been spent, so a second OOS
+    read is a hard error rather than a silent leak (spec §2.8 / §4.6).
     """
     guard.open()
-    return df.loc[df[date_col] >= OOS_START].copy()
+    return _oos_slice(df, date_col)
+
+
+def read_oos_panels_once(
+    book: pd.DataFrame,
+    returns: pd.DataFrame,
+    universe: pd.DataFrame,
+    guard: OneShotOOS,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return the OOS slices of ALL THREE engine inputs, spending the guard once.
+
+    The OOS window enters the engine through three panels — the weight book
+    (sliced by ``rebalance_date``), the daily holding returns and the universe
+    (both sliced by ``date``). Reading them via a single ``guard.open()`` makes
+    OOS-once **enforced** across every input rather than merely conventional: the
+    engine is then handed OOS-only panels, so it cannot read an OOS-dated daily
+    return or universe row outside this one guarded code path (spec §2.8 / §4.6).
+    A second call raises. ``open_count`` stays at 1.
+    """
+    guard.open()
+    return (
+        _oos_slice(book, "rebalance_date"),
+        _oos_slice(returns, "date"),
+        _oos_slice(universe, "date"),
+    )
 
 
 # ===========================================================================
@@ -420,18 +448,33 @@ def regime_breakdown(net_returns: pd.Series, labels: pd.Series) -> dict:
 # ===========================================================================
 
 def _candidate_for_capacity(
-    book: pd.DataFrame, universe: pd.DataFrame, gross_expected_return: float
+    universe: pd.DataFrame,
+    trades: pd.DataFrame,
+    gross_expected_return: float,
 ) -> dict:
-    """Build the capacity ``candidate`` from the average per-rebalance trade profile.
+    """Build the capacity ``candidate`` from the average per-rebalance TRADED order.
 
-    Per coin the traded fraction is the mean |traded weight| across rebalances
-    (the order size as a fraction of the book each rebalance); ADV and liquidity
-    rank are taken from the universe panel as-of the first rebalance the coin
-    appears in. This feeds ``metrics.capacity`` (spec §4.5).
+    Per coin the traded fraction is the mean |traded weight| **per rebalance** —
+    ``Σ |Δw| / n_rebalances`` from the engine's trade log — i.e. the order size
+    actually executed each rebalance, NOT the standing held weight. (Most of the
+    book is re-established, not re-traded, so the held weight grossly overstates
+    the per-rebalance order: summed traded turnover here is ~2.0, the summed held
+    weight ~9.) Slippage is super-linear in order/ADV, so using the held weight
+    would understate capacity by orders of magnitude. ADV and liquidity rank are
+    taken from the universe panel as-of the latest in-sample row. This feeds
+    ``metrics.capacity`` (spec §4.5).
     """
-    # Mean |weight| per symbol = mean traded fraction (book starts flat; the
-    # standing book is roughly re-established each rebalance on this universe).
-    frac_by_sym = book.groupby("symbol")["weight"].apply(lambda w: float(w.abs().mean()))
+    # Per-rebalance traded fraction per coin = Σ |Δw| / n_rebalances (the order
+    # size executed each rebalance; the standing book is re-established, not
+    # re-traded, so traded << held).
+    n_rebalances = int(trades["rebalance_date"].nunique())
+    if n_rebalances <= 0:
+        frac_by_sym = pd.Series(dtype=float)
+    else:
+        frac_by_sym = (
+            trades.groupby("symbol")["traded_weight"].apply(lambda w: float(w.abs().sum()))
+            / n_rebalances
+        )
     # ADV + liquidity rank as-of the latest universe row (point-in-time-ish; the
     # capacity sweep is an order-of-magnitude estimate, not a per-date integral).
     latest_date = universe["date"].max()
@@ -522,8 +565,11 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
     )
     L.append(
         f"- **Capacity (primary, net expected return -> 0):** "
-        f"{_usd(p['capacity_aum'])} (AUM at which size-scaled slippage erases "
-        f"the gross edge; per-rebalance gross edge {_fmt(p['gross_edge'], 5)})."
+        f"~{_usd(p['capacity_aum'])} (AUM at which size-scaled slippage erases the "
+        f"gross edge, computed on the actual per-rebalance *traded* order — "
+        f"~2.0x summed one-way turnover — not the standing held book; per-rebalance "
+        f"gross edge {_fmt(p['gross_edge'], 5)}). Comfortably above a $1M book — "
+        f"**capacity is not the binding constraint** (see Conclusion)."
     )
     L.append("")
 
@@ -543,6 +589,21 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         L.append(_metric_row("in-sample", s["is_gross_sharpe"], s["is_net"]))
         L.append(_metric_row("out-of-sample", s["oos_gross_sharpe"], s["oos_net"]))
         L.append("")
+
+    # The §4.5 metric set performance() computes but the table above omits:
+    # total compounded return + avg win / avg loss per period (all net of costs).
+    L.append("## Additional §4.5 net metrics (total return, avg win / loss)")
+    L.append("")
+    L.append("| spec | segment | total return | avg win | avg loss |")
+    L.append("|---|---|---|---|---|")
+    for spec_key, label in (("primary", "Primary L5d_S1d"), ("comparator", "Comparator L28d_S1d")):
+        s = report[spec_key]
+        for seg, m in (("in-sample", s["is_net"]), ("out-of-sample", s["oos_net"])):
+            L.append(
+                f"| {label} | {seg} | {_fmt(m['total_return'], 4)} | "
+                f"{_fmt(m['avg_win'], 5)} | {_fmt(m['avg_loss'], 5)} |"
+            )
+    L.append("")
 
     L.append("## Robustness (primary L5d_S1d; reruns reuse the chosen spec)")
     L.append("")
@@ -588,6 +649,18 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         "**bear** (spec §4.6 convention)._"
     )
     L.append("")
+    L.append(
+        "> **Caveat (do not over-read):** this regime cut is a **full-sample, "
+        "descriptive** partition of the in-sample windows, **not** a walk-forward "
+        "signal — it could not have been traded ex-ante. The `chop` bucket is just "
+        "the top-|market-move| tercile, which on this sample skews toward large "
+        "**up** moves, so it absorbs much of the strongest bull tape; the apparent "
+        "'negative in bull / positive in bear' contrast is therefore **overstated** "
+        "and is an artifact of where the magnitude cut falls, not clean evidence of "
+        "a bear-only edge. The disqualifying signal is the Stage-2 §2.6 "
+        "sign-instability, not this descriptive split."
+    )
+    L.append("")
 
     L.append("## Disclosures (spec §5.4)")
     L.append("")
@@ -612,6 +685,20 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         "- **Multi-factor combination is N/A** for a single null factor (spec §3.2-"
         "§3.3); Stage 3 reduced to volatility targeting on the candidate, included here."
     )
+    L.append(
+        "- **Persisted `equity.parquet` `gross_return`** is the **net run's pre-cost** "
+        "book return (the vol-scalar path fed by net returns), **not** the reported "
+        "gross Sharpe series — that gross Sharpe comes from an *independent "
+        "frictionless* run (its own vol-scalar path). The two gross series differ "
+        "slightly by construction; the headline gross Sharpe is the frictionless one."
+    )
+    L.append(
+        f"- **Dropped boundary window:** the holding window straddling `OOS_START` "
+        f"(from the last in-sample rebalance to {OOS_START.date()}) is priced by "
+        f"neither segment — the in-sample run has no forward window past its last "
+        f"rebalance and the OOS run starts fresh at `OOS_START` — so that one "
+        f"straddle window is intentionally not counted (no double-count, no leak)."
+    )
     L.append("")
     L.append("## Conclusion (honest, not flattering the null either way)")
     L.append("")
@@ -623,11 +710,12 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
     )
     L.append("")
     L.append(
-        "- The OOS window is **30 overlapping-regime observations spent once** — "
-        "a single favorable stretch (the 2024 crypto bull) carries it; the regime "
-        "breakdown above shows the net edge is **negative in the bull regime** and "
-        "positive only in bear / high-vol windows, i.e. the return is **regime "
-        "exposure, not a stable factor** (the Stage-2 §2.6 sign-flip disqualification)."
+        "- The OOS window is **30 overlapping-regime observations spent once** — a "
+        "single favorable stretch (the 2024 crypto bull) carries it. The return is "
+        "**regime exposure, not a stable factor**, consistent with the Stage-2 §2.6 "
+        "sign-flip disqualification. (The regime breakdown above is suggestive but "
+        "is a full-sample *descriptive* cut, not a walk-forward signal — see its "
+        "caveat; the disqualifying evidence is the §2.6 sign-instability itself.)"
     )
     L.append(
         "- The **±50% lookback rerun is fragile**: the construction is not robust to "
@@ -639,9 +727,12 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         "not work at all net of costs."
     )
     L.append(
-        f"- **Capacity** is small ({_usd(p['capacity_aum'])}): the size-scaled "
-        f"slippage erases the per-rebalance gross edge at a modest book size, so even "
-        f"the gross edge is not scalably harvestable."
+        f"- **Capacity does NOT bind** at deployable size: the net edge crosses zero "
+        f"only at ~{_usd(p['capacity_aum'])} of AUM (recomputed on the actual "
+        f"per-rebalance *traded* order, ~2.0x summed one-way turnover, not the "
+        f"standing held book). At a $1M book the slippage drag is immaterial, so "
+        f"capacity is **not** what disqualifies this candidate — the no-deploy case "
+        f"rests entirely on the three points above."
     )
     L.append("")
     L.append(
@@ -649,7 +740,8 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         "disqualification, momentum on the Artemis spot universe is **not a deployable "
         "factor**. The primary's positive OOS Sharpe is a single-regime artifact on a "
         "spent-once 30-observation window, not a repeatable edge; it is reported as-is, "
-        "neither inflated nor suppressed."
+        "neither inflated nor suppressed. (Capacity is comfortable at $1M and is **not** "
+        "the binding constraint.)"
     )
     L.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -751,10 +843,13 @@ def main() -> int:
             labels = regime_labels(equal_weight_market_return(holding_is, universe_is, is_dates))
             net_series = in_sample_res["_net_run"]["equity"].set_index("date")["net_return"].iloc[1:]
             regimes = regime_breakdown(net_series, labels)
-            # Capacity (per-rebalance gross edge).
+            # Capacity (per-rebalance gross edge vs the actual traded-delta order
+            # profile from the net run's trade log — not the standing held weight).
             gross_eq = in_sample_res["_gross_eq"]
             gross_edge = float(gross_eq["gross_return"].iloc[1:].mean()) if len(gross_eq) > 1 else float("nan")
-            cand = _candidate_for_capacity(book_is, universe_is, gross_edge)
+            cand = _candidate_for_capacity(
+                universe_is, in_sample_res["_net_run"]["trades"], gross_edge
+            )
             capacity_aum = capacity(cand, trade_cost)["capacity_aum"]
 
         is_results[key] = {
@@ -768,15 +863,19 @@ def main() -> int:
     # =======================================================================
     # OUT-OF-SAMPLE: spend the sealed window EXACTLY ONCE (one guarded read)
     # =======================================================================
-    # All specs' books are concatenated and the OOS slice is read in a SINGLE
-    # guarded call — the only code path in the whole runner that touches a row
-    # dated >= OOS_START (spec §2.8 / §4.6). The combined OOS frame is then split
-    # back per spec; no further OOS read occurs.
+    # All specs' books are concatenated and the OOS slices of ALL THREE engine
+    # inputs (book + daily returns + universe) are read in a SINGLE guarded call —
+    # the only code path in the whole runner that touches a row dated >= OOS_START
+    # (spec §2.8 / §4.6). The engine then sees OOS-only panels, so OOS-once is
+    # ENFORCED across every input, not merely conventional. The combined OOS book
+    # is split back per spec; no further OOS read occurs.
     oos_guard = OneShotOOS()
     combined_books = pd.concat(
         [books[k].assign(_spec=k) for k in specs], ignore_index=True
     )
-    oos_combined = read_oos_once(combined_books, oos_guard)
+    oos_combined, oos_returns, oos_universe = read_oos_panels_once(
+        combined_books, returns_long, universe_long, oos_guard
+    )
 
     report: dict = {}
     for key, spec in specs.items():
@@ -786,10 +885,10 @@ def main() -> int:
             .drop(columns="_spec")
             .reset_index(drop=True)
         )
-        # Price OOS forward (r, next_r] — all OOS-dated; the full panels are passed
-        # but only the OOS rebalances drive the engine, so only OOS rows are read.
-        oos_gross_eq, oos_net_eq = run_gross_and_net(book_oos, returns_long, universe_long)
-        oos_net_run = run_full(book_oos, returns_long, universe_long)
+        # Price OOS forward (r, next_r] on the OOS-only panels: every row the
+        # engine reads is OOS-dated and came through the single guarded read.
+        oos_gross_eq, oos_net_eq = run_gross_and_net(book_oos, oos_returns, oos_universe)
+        oos_net_run = run_full(book_oos, oos_returns, oos_universe)
         oos_net = metrics_for(oos_net_eq, oos_net_run["trades"])
         oos_gross_sh = gross_sharpe(oos_gross_eq)
 
@@ -806,7 +905,8 @@ def main() -> int:
             overfit_note = (
                 "OOS Sharpe did NOT collapse (it exceeds in-sample) — but this is a "
                 "single-regime artifact on a spent-once 30-obs window, not evidence "
-                "of a deployable edge (see the regime breakdown + sign-instability)."
+                "of a deployable edge (the disqualifying signal is the Stage-2 §2.6 "
+                "sign-instability; the regime breakdown is a descriptive cut only)."
             )
         else:
             overfit_note = "OOS Sharpe is positive but the gap quantifies in-sample decay."
