@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments & secrets
+.venv/
+.env
+.env.*
+!.env.example
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Data artifacts (regenerated from Artemis; never committed)
+data/
+!data/.gitkeep
+
+# OS
+.DS_Store
