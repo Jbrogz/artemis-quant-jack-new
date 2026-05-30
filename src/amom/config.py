@@ -62,6 +62,15 @@ HOLDING_DAYS = 30
 # date r is the one dated r − LAG_DAYS; the holding window is (r, r+HOLDING_DAYS].
 LAG_DAYS = 1
 
+# --- Stage-2 power / effective-n threshold (spec §2.0) ---
+# A variant whose *effective* (non-overlapping) sample size falls below this
+# floor is labelled "inconclusive (underpowered)" rather than "insignificant":
+# too few independent draws to distinguish a true zero mean from a small one.
+# Pinned by convention (a conventional small-sample floor), NOT tuned to a
+# result. The 99 non-overlapping 30-day obs clear it; an overlapping series
+# whose effective n collapses below it is flagged underpowered.
+MIN_EFFECTIVE_N = 30
+
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
 # FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
