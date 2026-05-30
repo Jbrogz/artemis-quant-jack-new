@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-_OUTPUT_COLUMNS = ["date", "symbol", "ret"]
+_OUTPUT_COLUMNS = ["date", "symbol", "holding_return"]
 
 
 def build_holding_returns(
@@ -48,17 +48,17 @@ def build_holding_returns(
             the realized crash leg is the terminal return.
 
     Returns:
-        Long DataFrame ``[date, symbol, ret]`` with one row per realized holding
-        return. The first observation of each symbol yields no return (no prior
-        price to hold from). ``ret`` is the simple return ``p_t / p_{t-1} − 1``;
-        the final leg of a coin that crashes then delists is booked, never NaN or
-        dropped. Sorted by ``(date, symbol)``.
+        Long DataFrame ``[date, symbol, holding_return]`` with one row per realized
+        holding return. The first observation of each symbol yields no return (no
+        prior price to hold from). ``holding_return`` is the simple return
+        ``p_t / p_{t-1} − 1``; the final leg of a coin that crashes then delists is
+        booked, never NaN or dropped. Sorted by ``(date, symbol)``.
     """
     if price_panel.empty:
         return pd.DataFrame(
             {"date": pd.Series([], dtype="datetime64[ns]"),
              "symbol": pd.Series([], dtype=object),
-             "ret": pd.Series([], dtype=float)}
+             "holding_return": pd.Series([], dtype=float)}
         )
 
     priced = price_panel.dropna(subset=["price"]).copy()
@@ -68,7 +68,7 @@ def build_holding_returns(
     # Simple spot return per symbol from its own realized series; the crash leg
     # (e.g. 5/100 − 1 = −0.95) is captured here and survives even though the
     # coin delists right after — it is the realized terminal return.
-    priced["ret"] = (
+    priced["holding_return"] = (
         priced.groupby("symbol", sort=False)["price"].pct_change()
     )
 
@@ -76,12 +76,12 @@ def build_holding_returns(
     # (there is no realized holding return yet), but keep every later return,
     # including the terminal crash. We never drop rows on eligibility/delisting,
     # which is what preserves the survivorship signal.
-    returns = priced.dropna(subset=["ret"])
+    returns = priced.dropna(subset=["holding_return"])
 
     out = (
-        returns[["date", "symbol", "ret"]]
+        returns[["date", "symbol", "holding_return"]]
         .sort_values(["date", "symbol"])
         .reset_index(drop=True)
     )
-    out["ret"] = out["ret"].astype(float)
+    out["holding_return"] = out["holding_return"].astype(float)
     return out[_OUTPUT_COLUMNS]

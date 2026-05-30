@@ -12,8 +12,8 @@ Pipeline (spec §4 Stage 1.2, plan Task S0):
 Conventions (spec §3.1, §4 Stage 1.2):
   - Holding return = simple spot price return (no funding — Artemis serves none).
   - Terminal crash returns are carried; no collapsed coin is silently dropped.
-  - The 'ret' column from spot.build_holding_returns is renamed 'holding_return'
-    on output for clarity (plan Task S0 output schema).
+  - spot.build_holding_returns emits the 'holding_return' column directly
+    (plan Task S0 output schema); no post-hoc rename is needed.
 
 Security: ARTEMIS_API_KEY loaded via dotenv; NEVER printed — only len(key).
 """
@@ -151,10 +151,8 @@ def main() -> None:
     print(f"Universe panel loaded: {len(universe_panel):,} rows")
 
     # --- Build holding returns. ---
-    raw = build_holding_returns(price_panel, universe_panel)
-
-    # Rename 'ret' -> 'holding_return' (plan Task S0 output schema).
-    holding = raw.rename(columns={"ret": "holding_return"})
+    # spot.build_holding_returns emits the 'holding_return' column directly.
+    holding = build_holding_returns(price_panel, universe_panel)
 
     # --- Write output. ---
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
