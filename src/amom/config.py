@@ -14,9 +14,29 @@ CACHE_DIR = DATA_DIR / "cache"
 # --- Artemis API ---
 ARTEMIS_BASE_URL = "https://data-svc.artemisxyz.com/data/api"
 
+# --- Asset catalog (no API key required; spec §4 Stage 1.1, Appendix B) ---
+ASSET_CATALOG_URL = "https://data-svc.artemisxyz.com/asset"
+
 # --- Point-in-time eligibility thresholds (guide §1.1, spec §4 Stage 1.1) ---
 MIN_HISTORY_DAYS = 90              # min price history, in days, to be eligible
-MIN_ADV_USD = 1_000_000           # min trailing-30d average daily volume, USD
+
+# --- Liquidity gate (spec §3.5): MC floor + trailing-30d median 24H_VOLUME ---
+# 30D_VOLUME is real-time-only (sentinel on historical pulls); not used.
+MIN_MC_USD = 10_000_000           # min market cap, USD
+MIN_MEDIAN_VOL_USD = 1_000_000    # min trailing-30d median 24H_VOLUME, USD
+LIQUIDITY_VOL_WINDOW_DAYS = 30    # window for median volume calculation
+
+# --- Observation density + tradeability (spec §4 Stage 1.1) ---
+MIN_OBS_DENSITY = 0.5             # min fraction of trailing-90d days with a price
+LISTING_STALENESS_DAYS = 7        # max days since last price to be tradeable
+
+# --- Backward-compat alias (used by eligibility.py pre-R2 redesign) ---
+# Task R2 will replace this with the MC + median-volume gate; until then the
+# existing eligibility tests need the $1M ADV threshold to remain importable.
+MIN_ADV_USD = MIN_MEDIAN_VOL_USD  # alias: will be removed in Task R2
+
+# --- Universe panel grid ---
+UNIVERSE_GRID_FREQ = "D"          # daily grid (guide §1.1 "rebuild daily")
 
 # --- Minimum-universe gate (point-in-time; guide §1.1, spec §4 Stage 1.1) ---
 # A rebalance date with fewer than MIN_ELIGIBLE_NAMES eligible coins is gated
@@ -24,8 +44,10 @@ MIN_ADV_USD = 1_000_000           # min trailing-30d average daily volume, USD
 MIN_ELIGIBLE_NAMES = 20           # min eligible coins for a non-gated rebalance date
 MIN_BUCKET_SIZE = 3               # min names per quintile bucket
 
-# Market metrics used in all provider calls for the momentum factor
-MARKET_METRICS = ("PRICE", "MC", "FDMC", "24H_VOLUME", "30D_VOLUME")
+# Market metrics used in all provider calls for the momentum factor.
+# 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
+# FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
+MARKET_METRICS = ("PRICE", "MC", "24H_VOLUME")
 
 # --- Exclusions ---
 STABLECOINS = frozenset({
