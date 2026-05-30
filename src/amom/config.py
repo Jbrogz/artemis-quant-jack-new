@@ -35,9 +35,12 @@ UNIVERSE_GRID_FREQ = "D"          # daily grid (guide §1.1 "rebuild daily")
 
 # --- Minimum-universe gate (point-in-time; guide §1.1, spec §4 Stage 1.1) ---
 # A rebalance date with fewer than MIN_ELIGIBLE_NAMES eligible coins is gated
-# (skipped), so each quintile has >= MIN_BUCKET_SIZE names. Convention, not tuned.
-MIN_ELIGIBLE_NAMES = 20           # min eligible coins for a non-gated rebalance date
+# (skipped). The floor is DERIVED from MIN_BUCKET_SIZE: a non-gated date must be
+# able to field a full quintile sort with >= MIN_BUCKET_SIZE names per bucket,
+# i.e. N_QUINTILES * MIN_BUCKET_SIZE. Not a coincidental constant. (spec §4)
 MIN_BUCKET_SIZE = 3               # min names per quintile bucket
+N_QUINTILES = 5                   # quintile sort -> 5 buckets
+MIN_ELIGIBLE_NAMES = N_QUINTILES * MIN_BUCKET_SIZE  # min eligible for non-gated
 
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and

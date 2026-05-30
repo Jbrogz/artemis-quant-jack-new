@@ -19,7 +19,12 @@ Every fixture is synthetic and offline; no API calls. The builder must:
 
 import pandas as pd
 
-from amom.config import MIN_ELIGIBLE_NAMES, MIN_MEDIAN_VOL_USD
+from amom.config import (
+    LISTING_STALENESS_DAYS,
+    MIN_BUCKET_SIZE,
+    MIN_ELIGIBLE_NAMES,
+    MIN_MEDIAN_VOL_USD,
+)
 from amom.universe.builder import build_universe_history
 
 
@@ -374,10 +379,20 @@ def test_output_schema_and_dtypes():
 
     panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
-    assert list(panel.columns) == ["date", "symbol", "eligible", "adv_30d", "gated"]
+    assert list(panel.columns) == [
+        "date",
+        "symbol",
+        "eligible",
+        "adv_30d",
+        "price_last_date",
+        "delisted_asof",
+        "gated",
+    ]
     assert pd.api.types.is_datetime64_any_dtype(panel["date"])
     assert panel["eligible"].dtype == bool
     assert panel["gated"].dtype == bool
+    assert panel["delisted_asof"].dtype == bool
+    assert pd.api.types.is_datetime64_any_dtype(panel["price_last_date"])
     assert pd.api.types.is_float_dtype(panel["adv_30d"])
 
 
@@ -397,3 +412,133 @@ def test_symbol_with_no_volume_has_zero_adv_and_is_ineligible():
     assert not a.empty
     assert a["adv_30d"].iloc[0] == 0.0
     assert bool(a["eligible"].iloc[0]) is False
+
+
+# ---------------------------------------------------------------------------
+# Task R3: death signal carried in the panel (price_last_date + delisted_asof)
+# ---------------------------------------------------------------------------
+
+def test_price_last_date_is_point_in_time():
+    """price_last_date is the latest priced date <= the as_of date, not the
+    coin's global last price. A future price must not advance it."""
+    # 'a' is priced daily through 2024-12-31; we evaluate mid-series.
+    price_rows = _price_rows("a", "2024-01-01", "2024-12-31")
+    vol_rows = _vol_rows("a", "2024-01-01", "2024-12-31", 5e6)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
+    dates = pd.DatetimeIndex([ts("2024-06-15")])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    row = panel.query("symbol == 'a' and date == @ts('2024-06-15')")
+    # The latest price <= 2024-06-15 is 2024-06-15 (daily series), NOT 12-31.
+    assert row["price_last_date"].iloc[0] == ts("2024-06-15")
+
+
+def test_delisted_asof_only_after_last_price_plus_grace_no_future_data():
+    """A collapsed coin that stops reporting on 2024-06-01 is delisted_asof
+    only on/after 2024-06-01 + LISTING_STALENESS_DAYS, never before, and the
+    flag uses only data dated <= the as_of date."""
+    # deadcoin: priced through the crash on 2024-06-01, then silent.
+    pre = _price_rows("deadcoin", "2023-01-01", "2024-05-31", value=100.0)
+    crash = [{"date": ts("2024-06-01"), "symbol": "deadcoin", "price": 5.0}]
+    dead_vol = _vol_rows("deadcoin", "2023-01-01", "2024-06-01", 5e6)
+    bg_price, bg_vol = _liquid_universe(
+        MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
+    )
+    price, vol, mc = _make_panels(pre + crash + bg_price, dead_vol + bg_vol)
+
+    grace = pd.Timedelta(days=LISTING_STALENESS_DAYS)
+    last = ts("2024-06-01")
+    # A date inside the grace window (not yet delisted) and one past it.
+    within = last + grace            # exactly == grace -> not strictly older
+    past = last + grace + pd.Timedelta(days=1)
+    before = ts("2024-05-15")        # still reporting -> not delisted
+    dates = pd.DatetimeIndex([before, last, within, past])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+
+    def deadflag(d):
+        r = panel.query("symbol == 'deadcoin' and date == @d")
+        return bool(r["delisted_asof"].iloc[0])
+
+    assert deadflag(before) is False  # actively reporting
+    assert deadflag(last) is False    # last price is today; staleness 0
+    assert deadflag(within) is False  # exactly at grace boundary, not > grace
+    assert deadflag(past) is True     # strictly past the grace window
+
+
+def test_delisted_asof_ignores_future_resumption():
+    """If a coin goes silent and later resumes, the delisted flag on a date in
+    the silent gap must reflect only data <= that date (a True), unaffected by
+    the future resumption."""
+    early = _price_rows("zombie", "2024-01-01", "2024-03-01", value=100.0)
+    # long silent gap, then resumes far in the future
+    revived = _price_rows("zombie", "2024-09-01", "2024-12-31", value=2.0)
+    vol_rows = _vol_rows("zombie", "2024-01-01", "2024-03-01", 5e6) + \
+        _vol_rows("zombie", "2024-09-01", "2024-12-31", 5e6)
+    price, vol, mc = _make_panels(early + revived, vol_rows)
+
+    # A date deep in the silent gap: last price <= here is 2024-03-01.
+    in_gap = ts("2024-06-01")
+    dates = pd.DatetimeIndex([in_gap])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    row = panel.query("symbol == 'zombie' and date == @in_gap")
+    assert row["price_last_date"].iloc[0] == ts("2024-03-01")
+    assert bool(row["delisted_asof"].iloc[0]) is True  # > grace, future ignored
+
+
+def test_delisted_asof_false_for_never_priced_at_or_before_date():
+    """A coin whose first price is strictly after the as_of date has no
+    price_last_date (NaT) and is not delisted — it has simply not listed yet."""
+    bg_price, bg_vol = _liquid_universe(2, "2020-01-01", "2024-12-31")
+    later = _price_rows("nascent", "2024-08-01", "2024-12-31")
+    later_vol = _vol_rows("nascent", "2024-08-01", "2024-12-31", 5e6)
+    price, vol, mc = _make_panels(bg_price + later, bg_vol + later_vol)
+    dates = pd.DatetimeIndex([ts("2024-06-01")])  # before nascent lists
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    row = panel.query("symbol == 'nascent' and date == @ts('2024-06-01')")
+    assert pd.isna(row["price_last_date"].iloc[0])
+    assert bool(row["delisted_asof"].iloc[0]) is False
+
+
+def test_delisted_asof_aligns_with_eligibility_exit():
+    """The death signal is consistent with the tradeability filter: once a coin
+    is delisted_asof, it is no longer eligible (staleness gate fired)."""
+    pre = _price_rows("deadcoin", "2023-01-01", "2024-05-31", value=100.0)
+    crash = [{"date": ts("2024-06-01"), "symbol": "deadcoin", "price": 5.0}]
+    dead_vol = _vol_rows("deadcoin", "2023-01-01", "2024-06-01", 5e6)
+    bg_price, bg_vol = _liquid_universe(
+        MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
+    )
+    price, vol, mc = _make_panels(pre + crash + bg_price, dead_vol + bg_vol)
+    dates = pd.date_range("2024-03-01", "2024-12-01", freq="MS")
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    dead = panel.query("symbol == 'deadcoin'")
+    # Wherever the death signal fired, the coin must not be eligible.
+    delisted = dead[dead["delisted_asof"]]
+    assert not delisted.empty, "death signal never fired for a collapsed coin"
+    assert not delisted["eligible"].any()
+
+
+def test_min_universe_gate_derived_from_min_bucket_size():
+    """The gate threshold is derived from MIN_BUCKET_SIZE (5 quintiles each
+    needing >= MIN_BUCKET_SIZE names), not a bare constant. A universe with
+    exactly one fewer than 5*MIN_BUCKET_SIZE eligible names is gated; exactly
+    5*MIN_BUCKET_SIZE is not."""
+    floor = 5 * MIN_BUCKET_SIZE
+
+    def build_n(n):
+        price_rows, vol_rows = _liquid_universe(n, "2020-01-01", "2024-12-31")
+        price, vol, mc = _make_panels(price_rows, vol_rows)
+        dates = pd.DatetimeIndex([ts("2024-06-01")])
+        return build_universe_history(price, vol, mc, dates=dates, excluded=set())
+
+    below = build_n(floor - 1)
+    assert int(below["eligible"].sum()) == floor - 1
+    assert bool(below["gated"].iloc[0]) is True  # too few -> gated
+
+    at = build_n(floor)
+    assert int(at["eligible"].sum()) == floor
+    assert bool(at["gated"].iloc[0]) is False  # exactly the floor -> open
