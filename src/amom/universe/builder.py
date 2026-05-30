@@ -1,7 +1,8 @@
 """Universe panel builder — survivorship + point-in-time + min-universe gate.
 
 This is the gated deliverable (guide §1.1, spec §4 Stage 1.1). It assembles a
-long ``[date, symbol, eligible, adv_30d, gated]`` panel that:
+long ``[date, symbol, eligible, adv_30d, price_last_date, delisted_asof, gated]``
+panel that:
 
   - covers **every symbol ever seen** across ``dates`` — including coins that
     later collapsed or delisted. They are kept as rows; they simply become
@@ -12,9 +13,18 @@ long ``[date, symbol, eligible, adv_30d, gated]`` panel that:
     plus obs-density and tradeability/staleness checks (spec §3.5, §4 Stage 1.1),
   - reports ``adv_30d`` = the trailing-30d ADV (sum of positive prints divided
     by the full window) used by the liquidity gate, point-in-time,
+  - carries the **death signal** (spec §4 Stage 1.1): ``price_last_date`` is the
+    latest priced date dated ``<= as_of`` (NaT before the coin lists), and
+    ``delisted_asof`` is ``(as_of - price_last_date) > LISTING_STALENESS_DAYS``
+    — a point-in-time flag that fires once a collapsed/stopped coin's reporting
+    lapses past the tradeability grace, so the returns layer (§Stage 1.2) knows
+    where to book the terminal crash return. Both use only data ``<= as_of``.
   - applies a **minimum-universe gate**: a date with fewer than
     ``MIN_ELIGIBLE_NAMES`` eligible coins is marked ``gated=True`` (the
-    rebalance is skipped downstream), using as-of information only.
+    rebalance is skipped downstream), using as-of information only. The floor is
+    **derived from** ``MIN_BUCKET_SIZE`` (5 quintile buckets × ``MIN_BUCKET_SIZE``
+    names) so a non-gated date can field a full quintile sort, not a
+    coincidental constant.
 
 The builder is pure and performs no I/O.
 """
@@ -25,13 +35,26 @@ import pandas as pd
 
 from amom.config import (
     LIQUIDITY_VOL_WINDOW_DAYS,
+    LISTING_STALENESS_DAYS,
     MIN_ELIGIBLE_NAMES,
     MIN_HISTORY_DAYS,
 )
 from amom.universe.coverage import first_seen_dates
 from amom.universe.eligibility import is_eligible, window_liquidity
 
-_OUTPUT_COLUMNS = ["date", "symbol", "eligible", "adv_30d", "gated"]
+# MIN_ELIGIBLE_NAMES is derived from MIN_BUCKET_SIZE in config (N_QUINTILES *
+# MIN_BUCKET_SIZE): a non-gated rebalance date must be able to field a full
+# quintile sort with at least MIN_BUCKET_SIZE names per bucket (spec §4 Stage 1.1).
+
+_OUTPUT_COLUMNS = [
+    "date",
+    "symbol",
+    "eligible",
+    "adv_30d",
+    "price_last_date",
+    "delisted_asof",
+    "gated",
+]
 
 
 def _trailing_windows(
@@ -171,26 +194,46 @@ def build_universe_history(
     last_price = _last_price_dates(price_panel, dates, symbols)
     mc_lookup = _mc_as_of(mc_panel, dates, symbols)
 
+    staleness = pd.Timedelta(days=LISTING_STALENESS_DAYS)
+
     rows = []
     for d in dates:
         for sym in symbols:
             window = vol_windows[(d, sym)]
             _, adv = window_liquidity(window)
+            last_date = last_price[(d, sym)]
             eligible = is_eligible(
                 sym,
                 d,
                 first_date=first_by_symbol.get(sym, pd.NaT),
-                last_price_date=last_price[(d, sym)],
+                last_price_date=last_date,
                 n_obs_90d=n_obs[(d, sym)],
                 mc=mc_lookup[(d, sym)],
                 vol_window=window,
                 excluded=excluded,
             )
-            rows.append((d, sym, eligible, adv))
+            # Point-in-time death signal: a coin whose latest price <= d is
+            # older than the staleness grace has stopped reporting (delisted /
+            # collapsed). A coin with no price at or before d (NaT) has simply
+            # not listed yet, so it is not delisted. Uses only data <= d.
+            delisted = pd.notna(last_date) and (d - last_date) > staleness
+            rows.append((d, sym, eligible, adv, last_date, delisted))
 
-    panel = pd.DataFrame(rows, columns=["date", "symbol", "eligible", "adv_30d"])
+    panel = pd.DataFrame(
+        rows,
+        columns=[
+            "date",
+            "symbol",
+            "eligible",
+            "adv_30d",
+            "price_last_date",
+            "delisted_asof",
+        ],
+    )
     panel["eligible"] = panel["eligible"].astype(bool)
     panel["adv_30d"] = panel["adv_30d"].astype(float)
+    panel["price_last_date"] = pd.to_datetime(panel["price_last_date"])
+    panel["delisted_asof"] = panel["delisted_asof"].astype(bool)
 
     # Point-in-time min-universe gate: per date, gated iff too few eligible.
     eligible_counts = panel.groupby("date")["eligible"].transform("sum")
