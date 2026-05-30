@@ -102,12 +102,71 @@ def compute_terminal_collapses(
     return count
 
 
+def cohort_split_collapses(
+    price_panel: pd.DataFrame,
+    universe_panel: pd.DataFrame,
+    *,
+    drawdown_thresh: float = _TERMINAL_DRAWDOWN_THRESH,
+) -> tuple[int, int]:
+    """Split terminal collapses into two cohorts: delisted vs zombie.
+
+    - **Delisted**: symbols that eventually fired ``delisted_asof=True`` in
+      the universe panel (i.e. their price reporting lapsed past the
+      ``LISTING_STALENESS_DAYS`` grace). These are dead — they stopped
+      printing.
+    - **Zombie**: symbols with a terminal >``drawdown_thresh`` collapse that
+      are *still printing* today (delisted_asof never fires, but they trade
+      at near-zero permanently, e.g. a coin on life-support with micro
+      volume).
+
+    Only symbols that actually show a terminal collapse (per the same peak-
+    last rule as ``compute_terminal_collapses``) are counted in either cohort.
+
+    Args:
+        price_panel: long ``[date, symbol, price]`` after recycled-ticker split.
+        universe_panel: the 8-column eligibility panel from ``build_universe_history``.
+        drawdown_thresh: collapse threshold (default 0.90, i.e. >90% drawdown).
+
+    Returns:
+        Tuple of (n_delisted, n_zombie) — counts of the two collapse cohorts.
+    """
+    if price_panel.empty or universe_panel.empty:
+        return (0, 0)
+
+    priced = price_panel.dropna(subset=["price"])
+    if priced.empty:
+        return (0, 0)
+
+    # Set of symbols that ever fired delisted_asof=True (stopped reporting).
+    ever_delisted: set[str] = set(
+        universe_panel.loc[universe_panel["delisted_asof"], "symbol"]
+    )
+
+    n_delisted = 0
+    n_zombie = 0
+    for sym, group in priced.groupby("symbol", sort=False):
+        prices = group.sort_values("date")["price"].to_numpy(dtype=float)
+        if prices.size == 0:
+            continue
+        peak = float(np.max(prices))
+        last = float(prices[-1])
+        collapsed = peak > 0 and last <= (1.0 - drawdown_thresh) * peak
+        if not collapsed:
+            continue
+        if sym in ever_delisted:
+            n_delisted += 1
+        else:
+            n_zombie += 1
+
+    return (n_delisted, n_zombie)
+
+
 def build_panel(
     registry: pd.DataFrame,
     provider: ArtemisProvider,
     history_start: str,
     history_end: str,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pull data for all registry artemis_ids and build the universe panel.
 
     This is the testable core extracted from main() so tests can patch it
@@ -120,7 +179,12 @@ def build_panel(
         history_end: ISO date string for the end of the pull.
 
     Returns:
-        The universe history panel from build_universe_history.
+        Tuple of (universe_panel, price_panel). ``universe_panel`` is the
+        8-column long panel ``[date, symbol, eligible, adv_30d,
+        price_last_date, delisted_asof, left_censored, gated]`` from
+        ``build_universe_history``. ``price_panel`` is the long
+        ``[date, symbol, price]`` frame after recycled-ticker splitting —
+        used by callers to compute holding returns and survivorship stats.
     """
     artemis_ids = registry["artemis_id"].dropna().tolist()
 
@@ -245,30 +309,37 @@ def main() -> None:
     latest_rows = panel[panel["date"] == latest]
     eligible_latest = int(latest_rows["eligible"].sum())
 
-    # Survivorship figure: #assets with a terminal >90% collapse.
+    # Survivorship figure: #assets with a terminal >90% collapse, split by cohort.
     # Uses the actual price panel returned by build_panel (includes the
     # recycled-ticker-split series) to count realized collapses from peak.
     n_terminal_collapse = compute_terminal_collapses(
         price_panel, drawdown_thresh=_TERMINAL_DRAWDOWN_THRESH
     )
+    n_delisted, n_zombie = cohort_split_collapses(
+        price_panel, panel, drawdown_thresh=_TERMINAL_DRAWDOWN_THRESH
+    )
 
     print()
     print("=" * 60)
-    print("  UNIVERSE PANEL STATS  (Task R5)")
+    print("  UNIVERSE PANEL STATS  (Task S0)")
     print("=" * 60)
     print(f"  rows                    : {n_rows:,}")
     print(f"  #assets                 : {n_assets:,}")
     print(f"  #ever-eligible          : {ever_eligible:,}")
     print(f"  #eligible-on-latest-date: {eligible_latest:,}  (latest={latest.date()})")
-    print(f"  #assets showing terminal >90% collapse: {n_terminal_collapse:,}")
+    print(f"  #assets with terminal >90% collapse: {n_terminal_collapse:,}")
+    print(f"    delisted cohort (stopped reporting)  : {n_delisted:,}")
+    print(f"    zombie cohort (still printing, ~zero): {n_zombie:,}")
     print(f"  written                 : {OUTPUT_PATH}")
     print()
     print("  Survivorship note:")
     print("  Terminal collapse = last observed price is <=10% of the all-time")
     print("  peak price for that asset. lunc/terra is included (LUNA crash).")
+    print("  Delisted cohort: stopped reporting (delisted_asof flag fired).")
+    print("  Zombie cohort: still printing at near-zero (never delisted_asof).")
     print("  Collapses are carried as realized crash returns in the panel.")
     print("  Residual survivorship from assets purged by Artemis is disclosed")
-    print("  in the report (spec §3.6 / §10) but cannot be recovered.")
+    print("  in docs/AUDIT.md (spec §3.6 / §10) but cannot be recovered.")
 
 
 if __name__ == "__main__":
