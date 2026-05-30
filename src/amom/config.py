@@ -42,6 +42,14 @@ MIN_BUCKET_SIZE = 3               # min names per quintile bucket
 N_QUINTILES = 5                   # quintile sort -> 5 buckets
 MIN_ELIGIBLE_NAMES = N_QUINTILES * MIN_BUCKET_SIZE  # min eligible for non-gated
 
+# --- Momentum signal grid (spec §1.3; fixed in advance, NOT selected from backtest) ---
+# Academic LTW baseline (14/28/56d = 2/4/8 weeks) plus crypto-short horizons.
+LOOKBACKS_DAYS = (1, 3, 5, 7, 14, 28, 56)   # 7 lookbacks, frozen
+# Skip is a nuisance parameter fixed by convention; {2,3} are robustness only
+# (separately reported), never a selection axis (spec §1.3, Appendix A H1).
+PRIMARY_SKIP_DAYS = 1
+ROBUSTNESS_SKIPS = (2, 3)
+
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
 # FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
