@@ -105,6 +105,22 @@ def in_sample(df: pd.DataFrame, date_col: str = "rebalance_date") -> pd.DataFram
     """
     return df.loc[df[date_col] < OOS_START].copy()
 
+# --- Spot cost model (Stage 4, spec §4.2; all bps, by convention, disclosed) ---
+# Fees: a spot TAKER fee charged PER SIDE on the traded notional. No maker
+# rebate is assumed (the strategy crosses the spread at the t+1 close). 10 bps
+# is a conservative retail spot taker rate.
+TAKER_FEE_BPS = 10                 # spot taker fee, per side, on traded notional
+# Slippage: size-scaled and tiered by liquidity rank. Names inside the top
+# SLIPPAGE_TOP_N (rank < N) pay the lower SLIPPAGE_TOP_BPS; smaller / less liquid
+# names pay SLIPPAGE_SMALL_BPS. The tier bps is the slippage of an order equal to
+# SLIPPAGE_ADV_REF of the coin's ADV; larger fractions of ADV scale the bps up
+# linearly in the order/ADV ratio (a market-impact proxy). No funding term —
+# this is a spot strategy and Artemis has no funding (spec §3.1; N/A, disclosed).
+SLIPPAGE_TOP_BPS = 5               # base slippage (bps) for top-N liquid names
+SLIPPAGE_SMALL_BPS = 15            # base slippage (bps) for smaller / illiquid names
+SLIPPAGE_TOP_N = 30                # liquidity-rank cutoff: rank < N is the top tier
+SLIPPAGE_ADV_REF = 0.01            # order/ADV reference: base bps applies at this ratio
+
 # Market metrics used in all provider calls for the momentum factor.
 # 30D_VOLUME is real-time-only on Artemis (sentinel on historical pulls) and
 # FDMC is unused; both are dropped. Only 24H_VOLUME is historical. (spec §3.5, Appendix B)
