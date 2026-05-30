@@ -175,9 +175,12 @@ def build_universe_history(
         excluded: collection of excluded symbols (stablecoins ∪ wrapped).
 
     Returns:
-        Long DataFrame ``[date, symbol, eligible, adv_30d, gated]`` with one row
-        per (date, symbol) for every symbol ever seen, sorted by (date, symbol).
-        ``eligible`` and ``gated`` are bool; ``adv_30d`` is float.
+        Long DataFrame ``[date, symbol, eligible, adv_30d, price_last_date,
+        delisted_asof, left_censored, gated]`` with one row per (date, symbol)
+        for every symbol ever seen, sorted by (date, symbol). ``eligible``,
+        ``delisted_asof``, ``left_censored``, and ``gated`` are bool;
+        ``adv_30d`` is float; ``price_last_date`` is datetime (NaT when no
+        price yet observed).
     """
     dates = pd.DatetimeIndex(dates).normalize()
 
