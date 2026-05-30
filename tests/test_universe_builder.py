@@ -9,16 +9,17 @@ price plus the history-grace window.
 
 Every fixture is synthetic and offline; no API calls. The builder must:
   - cover EVERY symbol ever seen across ``dates`` (incl. collapsed/delisted),
-  - rebuild Task-4 eligibility per (symbol, date), strictly point-in-time,
-  - compute trailing-30d ADV from volume rows dated ``<= date`` only,
+  - rebuild eligibility per (symbol, date), strictly point-in-time, using the
+    rev-3 MC-floor + robust-trailing-volume liquidity gate,
+  - report trailing-30d ADV (sum of positive prints / window) from volume rows
+    dated ``<= date`` only,
   - mark a date ``gated`` when ``eligible.sum() < MIN_ELIGIBLE_NAMES``,
   - never consult any data dated after the as-of date.
 """
 
-import numpy as np
 import pandas as pd
 
-from amom.config import MIN_ADV_USD, MIN_ELIGIBLE_NAMES
+from amom.config import MIN_ELIGIBLE_NAMES, MIN_MEDIAN_VOL_USD
 from amom.universe.builder import build_universe_history
 
 
@@ -40,10 +41,23 @@ def _vol_rows(symbol: str, start: str, end: str, daily_vol: float):
     return [{"date": d, "symbol": symbol, "volume": daily_vol} for d in dates]
 
 
-def _make_panels(price_rows: list, vol_rows: list):
+def _mc_rows(symbol: str, start: str, end: str, mc: float = 50e6):
+    dates = pd.date_range(start, end, freq="D")
+    return [{"date": d, "symbol": symbol, "mc": mc} for d in dates]
+
+
+def _make_panels(price_rows: list, vol_rows: list, mc_rows: list | None = None):
     price = pd.DataFrame(price_rows, columns=["date", "symbol", "price"])
     vol = pd.DataFrame(vol_rows, columns=["date", "symbol", "volume"])
-    return price, vol
+    if mc_rows is None:
+        # Default: every priced (symbol, date) gets a passing market cap so
+        # tests that don't probe the MC floor stay focused on their own axis.
+        mc_rows = [
+            {"date": r["date"], "symbol": r["symbol"], "mc": 50e6}
+            for r in price_rows
+        ]
+    mc = pd.DataFrame(mc_rows, columns=["date", "symbol", "mc"])
+    return price, vol, mc
 
 
 def _liquid_universe(n: int, start: str, end: str, daily_vol: float = 5e6):
@@ -78,10 +92,10 @@ def test_collapsed_coin_stays_in_panel_with_final_return():
         MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
     )
 
-    price, vol = _make_panels(dead_price + bg_price, dead_vol + bg_vol)
+    price, vol, mc = _make_panels(dead_price + bg_price, dead_vol + bg_vol)
     dates = pd.date_range("2024-03-01", "2024-12-01", freq="MS")
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     # deadcoin appears in the panel and is eligible on at least one date.
     dead = panel.query("symbol == 'deadcoin'")
@@ -112,10 +126,10 @@ def test_collapsed_coin_final_observed_value_reflects_crash():
     bg_price, bg_vol = _liquid_universe(
         MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
     )
-    price, vol = _make_panels(pre + crash + bg_price, dead_vol + bg_vol)
+    price, vol, mc = _make_panels(pre + crash + bg_price, dead_vol + bg_vol)
     dates = pd.date_range("2024-03-01", "2024-12-01", freq="MS")
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     # On 2024-06-01 the crash row exists and the coin is still in the panel.
     on_crash = panel.query("symbol == 'deadcoin' and date == @ts('2024-06-01')")
@@ -137,14 +151,14 @@ def test_eligibility_rebuilt_each_date_and_point_in_time():
     bg_price, bg_vol = _liquid_universe(
         MIN_ELIGIBLE_NAMES, "2020-01-01", "2025-01-01"
     )
-    price, vol = _make_panels(new_price + bg_price, new_vol + bg_vol)
+    price, vol, mc = _make_panels(new_price + bg_price, new_vol + bg_vol)
 
     # Dates straddling the 90d threshold (first_date + 90d = 2024-03-31).
     before = ts("2024-03-15")   # 74 days -> ineligible
     after = ts("2024-04-15")    # 105 days -> eligible
     dates = pd.DatetimeIndex([before, after])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     e_before = panel.query("symbol == 'newcoin' and date == @before")["eligible"].iloc[0]
     e_after = panel.query("symbol == 'newcoin' and date == @after")["eligible"].iloc[0]
@@ -158,10 +172,10 @@ def test_panel_covers_every_symbol_on_every_date():
         _price_rows("b", "2024-03-01", "2024-06-30")
     vol_rows = _vol_rows("a", "2024-01-01", "2024-06-30", 5e6) + \
         _vol_rows("b", "2024-03-01", "2024-06-30", 5e6)
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.date_range("2024-04-01", "2024-06-01", freq="MS")
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     symbols = set(panel["symbol"].unique())
     assert symbols == {"a", "b"}
@@ -177,10 +191,10 @@ def test_no_lookahead_future_data_irrelevant_to_panel():
     price_rows, vol_rows = _liquid_universe(
         MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
     )
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.date_range("2024-01-01", "2024-06-01", freq="MS")
 
-    panel_base = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel_base = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     # Mutate the future: collapse all volume strictly after the LAST as_of date,
     # and append a brand-new coin that only exists in the future. Neither can
@@ -189,13 +203,19 @@ def test_no_lookahead_future_data_irrelevant_to_panel():
     vol_mut = vol.copy()
     future = vol_mut["date"] > last_date
     vol_mut.loc[future, "volume"] = 0.0
-    # add a future-only coin
+    mc_mut = mc.copy()
+    mc_mut.loc[mc_mut["date"] > last_date, "mc"] = 0.0  # garbage future MC
+    # add a future-only coin (price + volume + MC all strictly in the future)
     fut_price = _price_rows("future_only", "2024-07-01", "2024-12-31")
     fut_vol = _vol_rows("future_only", "2024-07-01", "2024-12-31", 9e9)
+    fut_mc = _mc_rows("future_only", "2024-07-01", "2024-12-31", 1e12)
     price_mut = pd.concat([price, pd.DataFrame(fut_price)], ignore_index=True)
     vol_mut = pd.concat([vol_mut, pd.DataFrame(fut_vol)], ignore_index=True)
+    mc_mut = pd.concat([mc_mut, pd.DataFrame(fut_mc)], ignore_index=True)
 
-    panel_mut = build_universe_history(price_mut, vol_mut, dates=dates, excluded=set())
+    panel_mut = build_universe_history(
+        price_mut, vol_mut, mc_mut, dates=dates, excluded=set()
+    )
 
     # Restrict to the originally-present symbols on the original dates.
     base = panel_base.sort_values(["date", "symbol"]).reset_index(drop=True)
@@ -213,15 +233,19 @@ def test_no_lookahead_future_data_irrelevant_to_panel():
 # Trailing-30d ADV is point-in-time
 # ---------------------------------------------------------------------------
 
-def test_adv_is_trailing_30d_mean_as_of_date():
-    """adv_30d equals the mean of the trailing 30 days of volume <= the date."""
-    # One coin with a known constant volume -> trailing-30d mean equals it.
+def test_adv_is_trailing_30d_sum_over_window_as_of_date():
+    """adv_30d = sum(positive prints) / 30 over the trailing window <= the date.
+
+    With a full window of constant daily volume the ADV equals that constant;
+    the rev-3 gate's denominator is the full window (not present rows), so a
+    sparse window would yield a small ADV instead.
+    """
     vol_rows = _vol_rows("a", "2024-01-01", "2024-06-30", 4e6)
     price_rows = _price_rows("a", "2023-01-01", "2024-06-30")
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-05-15")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
     adv = panel.query("symbol == 'a'")["adv_30d"].iloc[0]
     assert adv == 4e6
 
@@ -233,10 +257,10 @@ def test_adv_only_uses_volume_at_or_before_date():
     spike = [{"date": ts("2024-06-30"), "symbol": "a", "volume": 1e12}]
     vol_rows = base + spike
     price_rows = _price_rows("a", "2023-01-01", "2024-06-30")
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-05-15")])  # before the spike
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
     adv = panel.query("symbol == 'a'")["adv_30d"].iloc[0]
     assert adv == 2e6  # spike ignored entirely
 
@@ -255,13 +279,13 @@ def test_min_universe_gate_is_point_in_time():
         sym = f"c{i}"
         price_rows += _price_rows(sym, "2024-01-01", "2024-12-31")
         vol_rows += _vol_rows(sym, "2024-01-01", "2024-12-31", 5e6)
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
 
     early = ts("2024-02-01")    # ~31d history -> 0 eligible -> gated
     late = ts("2024-06-01")     # >90d history -> all eligible -> not gated
     dates = pd.DatetimeIndex([early, late])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     early_rows = panel.query("date == @early")
     late_rows = panel.query("date == @late")
@@ -276,10 +300,10 @@ def test_min_universe_gate_is_point_in_time():
 def test_gate_is_constant_per_date():
     """gated is a per-date flag: identical across all symbols on a given date."""
     price_rows, vol_rows = _liquid_universe(3, "2020-01-01", "2024-12-31")
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-06-01")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
     on_date = panel.query("date == @ts('2024-06-01')")
     # Only 3 eligible names < MIN_ELIGIBLE_NAMES -> all gated.
     assert on_date["gated"].nunique() == 1
@@ -292,16 +316,16 @@ def test_gate_future_mutation_does_not_change_decision():
     price_rows, vol_rows = _liquid_universe(
         MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
     )
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.date_range("2024-01-01", "2024-03-01", freq="MS")
 
-    base = build_universe_history(price, vol, dates=dates, excluded=set())
+    base = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     # Kill all volume after the last as_of date.
     last_date = dates.max()
     vol_mut = vol.copy()
     vol_mut.loc[vol_mut["date"] > last_date, "volume"] = 0.0
-    mut = build_universe_history(price, vol_mut, dates=dates, excluded=set())
+    mut = build_universe_history(price, vol_mut, mc, dates=dates, excluded=set())
 
     base_gate = base.groupby("date")["gated"].first()
     mut_gate = mut.groupby("date")["gated"].first()
@@ -319,10 +343,10 @@ def test_excluded_symbols_never_eligible():
     # add a stablecoin that is liquid + old but excluded
     price_rows += _price_rows("usdt", "2020-01-01", "2024-12-31")
     vol_rows += _vol_rows("usdt", "2020-01-01", "2024-12-31", 1e10)
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-06-01")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded={"usdt"})
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded={"usdt"})
     usdt = panel.query("symbol == 'usdt'")
     assert not usdt.empty  # present in panel (covers every symbol)
     assert bool(usdt["eligible"].any()) is False  # never eligible
@@ -333,22 +357,22 @@ def test_illiquid_coin_is_ineligible_but_present():
     # a long-history but illiquid coin
     price_rows += _price_rows("thin", "2020-01-01", "2024-12-31")
     vol_rows += _vol_rows("thin", "2020-01-01", "2024-12-31", 0.1e6)  # < $1M
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-06-01")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
     thin = panel.query("symbol == 'thin'")
     assert not thin.empty
     assert bool(thin["eligible"].any()) is False
-    assert thin["adv_30d"].iloc[0] < MIN_ADV_USD
+    assert thin["adv_30d"].iloc[0] < MIN_MEDIAN_VOL_USD
 
 
 def test_output_schema_and_dtypes():
     price_rows, vol_rows = _liquid_universe(2, "2020-01-01", "2024-12-31")
-    price, vol = _make_panels(price_rows, vol_rows)
+    price, vol, mc = _make_panels(price_rows, vol_rows)
     dates = pd.DatetimeIndex([ts("2024-06-01")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     assert list(panel.columns) == ["date", "symbol", "eligible", "adv_30d", "gated"]
     assert pd.api.types.is_datetime64_any_dtype(panel["date"])
@@ -357,15 +381,19 @@ def test_output_schema_and_dtypes():
     assert pd.api.types.is_float_dtype(panel["adv_30d"])
 
 
-def test_symbol_with_no_volume_has_nan_adv_and_is_ineligible():
-    """A symbol present in price but absent from volume gets NaN ADV -> out."""
+def test_symbol_with_no_volume_has_zero_adv_and_is_ineligible():
+    """A symbol present in price but absent from volume gets ADV 0.0 -> out.
+
+    With no positive prints in the window the trailing-window ADV is 0.0 (sum of
+    nothing / window), which is below the floor, so the coin is ineligible.
+    """
     price_rows = _price_rows("a", "2020-01-01", "2024-12-31")
     bg_p, bg_v = _liquid_universe(2, "2020-01-01", "2024-12-31")
-    price, vol = _make_panels(price_rows + bg_p, bg_v)  # 'a' missing from vol
+    price, vol, mc = _make_panels(price_rows + bg_p, bg_v)  # 'a' missing from vol
     dates = pd.DatetimeIndex([ts("2024-06-01")])
 
-    panel = build_universe_history(price, vol, dates=dates, excluded=set())
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
     a = panel.query("symbol == 'a'")
     assert not a.empty
-    assert np.isnan(a["adv_30d"].iloc[0])
+    assert a["adv_30d"].iloc[0] == 0.0
     assert bool(a["eligible"].iloc[0]) is False
