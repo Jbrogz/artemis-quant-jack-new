@@ -15,6 +15,14 @@ Every fixture is synthetic and offline; no API calls. The builder must:
     dated ``<= date`` only,
   - mark a date ``gated`` when ``eligible.sum() < MIN_ELIGIBLE_NAMES``,
   - never consult any data dated after the as-of date.
+
+Task R6 additions:
+  - per-date no-look-ahead: for each grid date d, dropping rows > d must not
+    change eligible/gated/delisted_asof at d,
+  - intraday-bar boundary: panels with intraday timestamps are normalized to
+    midnight so half-open <= comparisons are robust,
+  - left-censoring: assets whose first price == the panel pull-start are flagged
+    as left_censored (their true listing date is unknown).
 """
 
 import pandas as pd
@@ -386,12 +394,14 @@ def test_output_schema_and_dtypes():
         "adv_30d",
         "price_last_date",
         "delisted_asof",
+        "left_censored",
         "gated",
     ]
     assert pd.api.types.is_datetime64_any_dtype(panel["date"])
     assert panel["eligible"].dtype == bool
     assert panel["gated"].dtype == bool
     assert panel["delisted_asof"].dtype == bool
+    assert panel["left_censored"].dtype == bool
     assert pd.api.types.is_datetime64_any_dtype(panel["price_last_date"])
     assert pd.api.types.is_float_dtype(panel["adv_30d"])
 
@@ -542,3 +552,269 @@ def test_min_universe_gate_derived_from_min_bucket_size():
     at = build_n(floor)
     assert int(at["eligible"].sum()) == floor
     assert bool(at["gated"].iloc[0]) is False  # exactly the floor -> open
+
+
+# ---------------------------------------------------------------------------
+# Task R6: per-date no-look-ahead (discriminating, row-dropping variant)
+# ---------------------------------------------------------------------------
+
+def test_per_date_nolookahead_eligible_unchanged_when_future_rows_dropped():
+    """For every grid date d, dropping ALL rows (price/vol/mc) dated strictly
+    after d must produce the same eligible flag at d as the full build.
+
+    This is more discriminating than the previous mutation test: we do a full
+    drop (not just zeroing) so even symbol presence changes after d — the builder
+    must use only data <= d for each date independently.
+    """
+    price_rows, vol_rows = _liquid_universe(
+        MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
+    )
+    # Add a coin that starts mid-way so its eligibility changes across dates.
+    price_rows += _price_rows("latestart", "2024-01-01", "2025-01-01")
+    vol_rows += _vol_rows("latestart", "2024-01-01", "2025-01-01", 5e6)
+
+    price_full, vol_full, mc_full = _make_panels(price_rows, vol_rows)
+    dates = pd.date_range("2024-01-01", "2024-12-01", freq="MS")
+
+    panel_full = build_universe_history(
+        price_full, vol_full, mc_full, dates=dates, excluded=set()
+    )
+
+    for d in dates:
+        # Restrict all panels to rows <= d.
+        p_trunc = price_full[price_full["date"] <= d]
+        v_trunc = vol_full[vol_full["date"] <= d]
+        m_trunc = mc_full[mc_full["date"] <= d]
+
+        panel_trunc = build_universe_history(
+            p_trunc, v_trunc, m_trunc, dates=pd.DatetimeIndex([d]), excluded=set()
+        )
+
+        # For every symbol present on date d in both panels, eligible must agree.
+        full_at_d = (
+            panel_full.query("date == @d")
+            .set_index("symbol")[["eligible", "gated", "delisted_asof"]]
+        )
+        trunc_at_d = (
+            panel_trunc.query("date == @d")
+            .set_index("symbol")[["eligible", "gated", "delisted_asof"]]
+        )
+        # Symbols only in truncated (no future-only symbols) — compare intersection.
+        shared = full_at_d.index.intersection(trunc_at_d.index)
+        pd.testing.assert_frame_equal(
+            full_at_d.loc[shared].sort_index(),
+            trunc_at_d.loc[shared].sort_index(),
+            check_like=True,
+            obj=f"eligible/gated/delisted at {d.date()}",
+        )
+
+
+def test_per_date_nolookahead_gated_unchanged_when_future_rows_dropped():
+    """The gated flag at each date is unchanged when all rows after that date
+    are dropped. This tests the gate's as-of logic separately from eligible."""
+    price_rows, vol_rows = _liquid_universe(
+        MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
+    )
+    price_full, vol_full, mc_full = _make_panels(price_rows, vol_rows)
+    dates = pd.date_range("2023-06-01", "2024-06-01", freq="MS")
+
+    panel_full = build_universe_history(
+        price_full, vol_full, mc_full, dates=dates, excluded=set()
+    )
+
+    for d in dates:
+        p_trunc = price_full[price_full["date"] <= d]
+        v_trunc = vol_full[vol_full["date"] <= d]
+        m_trunc = mc_full[mc_full["date"] <= d]
+
+        panel_trunc = build_universe_history(
+            p_trunc, v_trunc, m_trunc, dates=pd.DatetimeIndex([d]), excluded=set()
+        )
+
+        gate_full = panel_full.query("date == @d")["gated"].iloc[0]
+        gate_trunc = panel_trunc.query("date == @d")["gated"].iloc[0]
+        assert gate_full == gate_trunc, (
+            f"gated at {d.date()} differs: full={gate_full}, trunc={gate_trunc}"
+        )
+
+
+def test_per_date_nolookahead_delisted_asof_unchanged_when_future_rows_dropped():
+    """delisted_asof at d must reflect only data <= d; dropping future rows must
+    not change the signal. Uses a coin that crashes and stops mid-series."""
+    pre = _price_rows("deadcoin", "2023-01-01", "2024-05-31", value=100.0)
+    crash = [{"date": ts("2024-06-01"), "symbol": "deadcoin", "price": 5.0}]
+    dead_vol = _vol_rows("deadcoin", "2023-01-01", "2024-06-01", 5e6)
+    bg_price, bg_vol = _liquid_universe(
+        MIN_ELIGIBLE_NAMES, "2023-01-01", "2025-01-01"
+    )
+    price_full, vol_full, mc_full = _make_panels(
+        pre + crash + bg_price, dead_vol + bg_vol
+    )
+    dates = pd.date_range("2024-04-01", "2024-10-01", freq="MS")
+
+    panel_full = build_universe_history(
+        price_full, vol_full, mc_full, dates=dates, excluded=set()
+    )
+
+    for d in dates:
+        p_trunc = price_full[price_full["date"] <= d]
+        v_trunc = vol_full[vol_full["date"] <= d]
+        m_trunc = mc_full[mc_full["date"] <= d]
+
+        panel_trunc = build_universe_history(
+            p_trunc, v_trunc, m_trunc, dates=pd.DatetimeIndex([d]), excluded=set()
+        )
+
+        full_row = panel_full.query("symbol == 'deadcoin' and date == @d")
+        trunc_row = panel_trunc.query("symbol == 'deadcoin' and date == @d")
+
+        full_flag = bool(full_row["delisted_asof"].iloc[0])
+        trunc_flag = bool(trunc_row["delisted_asof"].iloc[0])
+        assert full_flag == trunc_flag, (
+            f"delisted_asof for deadcoin at {d.date()} "
+            f"differs: full={full_flag}, trunc={trunc_flag}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task R6: intraday-bar boundary — date normalization at ingest
+# ---------------------------------------------------------------------------
+
+def test_intraday_timestamps_normalized_to_midnight():
+    """Panels whose 'date' column carries intraday timestamps (e.g. noon UTC from
+    an API response) must be normalized to midnight at the builder boundary so
+    half-open <= comparisons are identical to the midnight-only case.
+
+    Concretely: a row stamped 2024-06-01T12:00:00 and a grid date of 2024-06-01
+    must be treated as 'on' that date, not as 'after' it.
+    """
+    # Build a price/vol panel with an intraday timestamp.
+    price_rows_raw = _price_rows("a", "2023-01-01", "2024-12-31")
+    vol_rows_raw = _vol_rows("a", "2023-01-01", "2024-12-31", 5e6)
+
+    # Shift a subset of rows to noon UTC to simulate intraday API delivery.
+    price_intraday = [
+        {**r, "date": pd.Timestamp(r["date"]) + pd.Timedelta(hours=12)}
+        for r in price_rows_raw
+    ]
+    vol_intraday = [
+        {**r, "date": pd.Timestamp(r["date"]) + pd.Timedelta(hours=12)}
+        for r in vol_rows_raw
+    ]
+
+    price_intra = pd.DataFrame(price_intraday, columns=["date", "symbol", "price"])
+    vol_intra = pd.DataFrame(vol_intraday, columns=["date", "symbol", "volume"])
+    mc_intra = pd.DataFrame(
+        [{"date": pd.Timestamp(r["date"]) + pd.Timedelta(hours=12),
+           "symbol": "a", "mc": 50e6}
+         for r in price_rows_raw],
+        columns=["date", "symbol", "mc"],
+    )
+
+    dates = pd.DatetimeIndex([ts("2024-06-01")])
+
+    # With normalization the builder must treat intraday rows as their date-day.
+    panel = build_universe_history(
+        price_intra, vol_intra, mc_intra, dates=dates, excluded=set()
+    )
+    row = panel.query("symbol == 'a' and date == @ts('2024-06-01')")
+    assert not row.empty, "symbol missing — intraday rows not recognized as <= date"
+    assert bool(row["eligible"].iloc[0]) is True, (
+        "symbol ineligible — intraday timestamp not normalized to midnight"
+    )
+
+
+def test_intraday_price_last_date_normalized_correctly():
+    """price_last_date must equal the grid date (midnight) even when the raw
+    panel carries intraday timestamps, so delisted_asof arithmetic is correct."""
+    price_rows_raw = _price_rows("b", "2023-01-01", "2024-06-15")
+    vol_rows_raw = _vol_rows("b", "2023-01-01", "2024-06-15", 5e6)
+
+    # All rows at 23:59:59 — near end of day but still same calendar date.
+    def near_eod(r):
+        return {**r, "date": pd.Timestamp(r["date"]) + pd.Timedelta(hours=23, minutes=59, seconds=59)}
+
+    price_near = pd.DataFrame([near_eod(r) for r in price_rows_raw],
+                               columns=["date", "symbol", "price"])
+    vol_near = pd.DataFrame([near_eod(r) for r in vol_rows_raw],
+                             columns=["date", "symbol", "volume"])
+    mc_near = pd.DataFrame(
+        [{"date": pd.Timestamp(r["date"]) + pd.Timedelta(hours=23, minutes=59, seconds=59),
+          "symbol": "b", "mc": 50e6} for r in price_rows_raw],
+        columns=["date", "symbol", "mc"],
+    )
+
+    dates = pd.DatetimeIndex([ts("2024-06-15")])
+    panel = build_universe_history(
+        price_near, vol_near, mc_near, dates=dates, excluded=set()
+    )
+    row = panel.query("symbol == 'b' and date == @ts('2024-06-15')")
+    assert not row.empty
+    # price_last_date must be midnight 2024-06-15, not 2024-06-14T23:59:59.
+    assert row["price_last_date"].iloc[0] == ts("2024-06-15")
+
+
+# ---------------------------------------------------------------------------
+# Task R6: left-censoring flag (pull_start == first_price -> unknown true date)
+# ---------------------------------------------------------------------------
+
+def test_left_censored_flag_set_for_asset_at_pull_start():
+    """An asset whose first price equals the earliest date in the price panel
+    (the pull-start boundary) is left_censored: its true listing date is unknown.
+
+    The builder must emit a left_censored column, True for these assets.
+    """
+    # 'censor_me' starts exactly on the pull-start (earliest date in the panel).
+    # 'clear' starts later, so its first price is away from the boundary.
+    price_rows = (
+        _price_rows("censor_me", "2023-01-01", "2024-12-31")
+        + _price_rows("clear", "2023-06-01", "2024-12-31")
+    )
+    vol_rows = (
+        _vol_rows("censor_me", "2023-01-01", "2024-12-31", 5e6)
+        + _vol_rows("clear", "2023-06-01", "2024-12-31", 5e6)
+    )
+    price, vol, mc = _make_panels(price_rows, vol_rows)
+    dates = pd.DatetimeIndex([ts("2024-06-01")])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+
+    assert "left_censored" in panel.columns, "left_censored column missing"
+    row_censor = panel.query("symbol == 'censor_me'")
+    row_clear = panel.query("symbol == 'clear'")
+
+    assert bool(row_censor["left_censored"].iloc[0]) is True, (
+        "asset at pull-start boundary should be left_censored"
+    )
+    assert bool(row_clear["left_censored"].iloc[0]) is False, (
+        "asset starting after pull-start should NOT be left_censored"
+    )
+
+
+def test_left_censored_column_is_bool():
+    """left_censored must be a bool column (not object/int)."""
+    price_rows, vol_rows = _liquid_universe(2, "2020-01-01", "2024-12-31")
+    price, vol, mc = _make_panels(price_rows, vol_rows)
+    dates = pd.DatetimeIndex([ts("2024-06-01")])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    assert panel["left_censored"].dtype == bool
+
+
+def test_left_censored_schema_included_in_output_columns():
+    """The output schema now includes left_censored after delisted_asof."""
+    price_rows, vol_rows = _liquid_universe(2, "2020-01-01", "2024-12-31")
+    price, vol, mc = _make_panels(price_rows, vol_rows)
+    dates = pd.DatetimeIndex([ts("2024-06-01")])
+
+    panel = build_universe_history(price, vol, mc, dates=dates, excluded=set())
+    assert list(panel.columns) == [
+        "date",
+        "symbol",
+        "eligible",
+        "adv_30d",
+        "price_last_date",
+        "delisted_asof",
+        "left_censored",
+        "gated",
+    ]

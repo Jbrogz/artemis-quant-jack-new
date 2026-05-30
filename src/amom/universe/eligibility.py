@@ -20,10 +20,10 @@ before that date, it satisfies every filter:
 
 No look-ahead by construction: ``is_eligible`` consumes only as-of scalars and a
 pre-sliced trailing volume window (which carries no dates) — there is no
-parameter through which a future-dated series could enter the decision.
-``eligible_mask`` slices each symbol's volume to the trailing window dated at or
-before ``as_of`` and never any later row. Both functions are pure and perform
-no I/O.
+parameter through which a future-dated series could enter the decision. The
+builder (``universe/builder.py``) is the single call-site: it slices each
+symbol's volume to the trailing window dated at or before ``as_of`` and passes
+that slice to ``is_eligible``. Both functions are pure and perform no I/O.
 """
 from __future__ import annotations
 
@@ -123,54 +123,3 @@ def is_eligible(
         return False
 
     return True
-
-
-def eligible_mask(
-    as_of: pd.Timestamp,
-    coverage_df: pd.DataFrame,
-    volume_df: pd.DataFrame,
-    mc_df: pd.DataFrame,
-    excluded,
-) -> set:
-    """Return the set of symbols eligible as of ``as_of``.
-
-    Args:
-        as_of: the evaluation date.
-        coverage_df: DataFrame with columns
-            ``[symbol, price_first_date, price_last_date, n_obs]`` recomputed
-            as-of (the listing-date / density reconstruction).
-        volume_df: long DataFrame ``[date, symbol, volume]``. For each symbol the
-            trailing-``LIQUIDITY_VOL_WINDOW_DAYS`` window of observations dated
-            ``<= as_of`` is used; rows dated after ``as_of`` are ignored entirely
-            (no look-ahead). A symbol with no row in the window fails liquidity.
-        mc_df: DataFrame with columns ``[symbol, mc]`` of as-of market cap. A
-            symbol absent here maps to NaN (fails the MC floor).
-        excluded: a set/collection of excluded symbols.
-
-    Returns:
-        The set of eligible symbols.
-    """
-    window_lo = as_of - pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS)
-    in_window = (volume_df["date"] > window_lo) & (volume_df["date"] <= as_of)
-    vol_window = volume_df[in_window]
-    vol_by_symbol = {
-        sym: g["volume"].to_numpy(dtype=float)
-        for sym, g in vol_window.groupby("symbol", sort=False)
-    }
-    mc_as_of = mc_df.set_index("symbol")["mc"].to_dict()
-
-    eligible = set()
-    for row in coverage_df.itertuples(index=False):
-        if is_eligible(
-            row.symbol,
-            as_of,
-            first_date=row.price_first_date,
-            last_price_date=row.price_last_date,
-            n_obs_90d=int(row.n_obs),
-            mc=mc_as_of.get(row.symbol, float("nan")),
-            vol_window=vol_by_symbol.get(row.symbol, np.array([])),
-            excluded=excluded,
-        ):
-            eligible.add(row.symbol)
-
-    return eligible
