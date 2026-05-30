@@ -18,6 +18,12 @@ ARTEMIS_BASE_URL = "https://data-svc.artemisxyz.com/data/api"
 MIN_HISTORY_DAYS = 90              # min price history, in days, to be eligible
 MIN_ADV_USD = 1_000_000           # min trailing-30d average daily volume, USD
 
+# --- Minimum-universe gate (point-in-time; guide §1.1, spec §4 Stage 1.1) ---
+# A rebalance date with fewer than MIN_ELIGIBLE_NAMES eligible coins is gated
+# (skipped), so each quintile has >= MIN_BUCKET_SIZE names. Convention, not tuned.
+MIN_ELIGIBLE_NAMES = 20           # min eligible coins for a non-gated rebalance date
+MIN_BUCKET_SIZE = 3               # min names per quintile bucket
+
 # Market metrics used in all provider calls for the momentum factor
 MARKET_METRICS = ("PRICE", "MC", "FDMC", "24H_VOLUME", "30D_VOLUME")
 
