@@ -75,7 +75,7 @@ def test_terminal_crash_return_booked_on_delisting_not_nan():
 
     rets = build_holding_returns(price, universe)
 
-    dead = rets.query("symbol == 'deadcoin'").set_index("date")["ret"]
+    dead = rets.query("symbol == 'deadcoin'").set_index("date")["holding_return"]
     # The crash-day return is realized and equals (5/100 − 1) = −0.95.
     assert np.isclose(dead.loc[ts("2024-06-01")], -0.95)
     # No NaN anywhere in the realized holding series for the dead coin.
@@ -107,7 +107,7 @@ def test_terminal_return_is_present_even_though_coin_later_delisted():
     universe = build_universe_history(price, vol, mc, dates=dates, excluded=set())
 
     rets = build_holding_returns(price, universe)
-    dead = rets.query("symbol == 'deadcoin'").set_index("date")["ret"]
+    dead = rets.query("symbol == 'deadcoin'").set_index("date")["holding_return"]
     # No return is booked on or after the delisting date (no price after 06-01).
     after = dead[dead.index >= delist]
     assert after.empty
@@ -137,7 +137,7 @@ def test_simple_daily_returns_for_healthy_coin():
         price, vol, mc, dates=pd.DatetimeIndex([ts("2024-01-04")]), excluded=set()
     )
 
-    rets = build_holding_returns(price, universe).set_index("date")["ret"]
+    rets = build_holding_returns(price, universe).set_index("date")["holding_return"]
     assert np.isclose(rets.loc[ts("2024-01-02")], 0.10)
     assert np.isclose(rets.loc[ts("2024-01-03")], -0.10)
     assert np.isclose(rets.loc[ts("2024-01-04")], 0.0)
@@ -167,7 +167,7 @@ def test_no_funding_term_returns_are_pure_price():
         price, vol, mc, dates=pd.DatetimeIndex([ts("2024-01-31")]), excluded=set()
     )
 
-    rets = build_holding_returns(price, universe).set_index("date")["ret"]
+    rets = build_holding_returns(price, universe).set_index("date")["holding_return"]
     # Every realized return is exactly the price step (1.01 − 1), no offset.
     assert np.allclose(rets.dropna().to_numpy(), 0.01)
 
@@ -192,12 +192,12 @@ def test_returns_are_point_in_time_future_price_does_not_move_earlier_return():
     universe = build_universe_history(
         price, vol, mc, dates=pd.DatetimeIndex([ts("2024-03-31")]), excluded=set()
     )
-    base = build_holding_returns(price, universe).set_index("date")["ret"]
+    base = build_holding_returns(price, universe).set_index("date")["holding_return"]
 
     cut = ts("2024-02-15")
     price_mut = price.copy()
     price_mut.loc[price_mut["date"] > cut, "price"] = 1e9  # garbage future prices
-    mut = build_holding_returns(price_mut, universe).set_index("date")["ret"]
+    mut = build_holding_returns(price_mut, universe).set_index("date")["holding_return"]
 
     on_or_before = base.index <= cut
     pd.testing.assert_series_equal(
@@ -219,6 +219,6 @@ def test_output_schema_and_dtypes():
         price, vol, mc, dates=pd.DatetimeIndex([ts("2024-01-10")]), excluded=set()
     )
     rets = build_holding_returns(price, universe)
-    assert list(rets.columns) == ["date", "symbol", "ret"]
+    assert list(rets.columns) == ["date", "symbol", "holding_return"]
     assert pd.api.types.is_datetime64_any_dtype(rets["date"])
-    assert pd.api.types.is_float_dtype(rets["ret"])
+    assert pd.api.types.is_float_dtype(rets["holding_return"])
