@@ -148,6 +148,44 @@ def test_annual_turnover_from_trade_log():
     assert np.isclose(perf["annual_turnover"], expected)
 
 
+def test_annual_turnover_is_path_independent():
+    # Turnover must normalize each period's traded notional by THAT period's
+    # equity (not the constant opening book), so it is path-independent: a 1x and
+    # a 2x cost run trade the SAME weight fractions but on different equity paths
+    # (costs drag equity down), so the per-period notionals differ — yet turnover
+    # must come out ~identical. Here two trades execute at different equity levels
+    # but the SAME 10% fraction each; turnover must read 0.10 per period regardless.
+    ppy = 365.0 / 30.0
+    # Equity path: opens at 1.0M, drifts to 0.8M before the 2nd rebalance.
+    equity = pd.DataFrame(
+        [
+            {"date": ts("2020-01-01"), "equity": 1_000_000.0, "gross_return": 0.0,
+             "net_return": 0.0, "cost": 0.0},
+            {"date": ts("2020-02-01"), "equity": 800_000.0, "gross_return": -0.2,
+             "net_return": -0.2, "cost": 0.0},
+            {"date": ts("2020-03-01"), "equity": 800_000.0, "gross_return": 0.0,
+             "net_return": 0.0, "cost": 0.0},
+        ]
+    )
+    # Rebalance 0 trades 10% of the 1.0M book (100k); rebalance 1 trades 10% of
+    # the drifted 0.8M book (80k). Each period's turnover fraction is exactly 0.10.
+    trades = pd.DataFrame(
+        [
+            {"rebalance_date": ts("2020-01-01"), "symbol": "A",
+             "traded_weight": 0.10, "traded_notional": 100_000.0, "cost": 0.0},
+            {"rebalance_date": ts("2020-02-01"), "symbol": "A",
+             "traded_weight": 0.10, "traded_notional": 80_000.0, "cost": 0.0},
+        ]
+    )
+    returns = pd.Series([-0.2, 0.0])
+    perf = performance(equity, trades, returns, periods_per_year=ppy)
+    # Mean per-period one-way turnover fraction = 0.10, annualized by ppy.
+    assert np.isclose(perf["annual_turnover"], 0.10 * ppy)
+    # The buggy constant-book0 formula would give (180k / 1.0M) / 2 * ppy =
+    # 0.09 * ppy — strictly different, so this pins the path-independent fix.
+    assert not np.isclose(perf["annual_turnover"], (180_000.0 / 1_000_000.0) / 2 * ppy)
+
+
 # ---------------------------------------------------------------------------
 # capacity: monotone in AUM and crosses zero
 # ---------------------------------------------------------------------------
