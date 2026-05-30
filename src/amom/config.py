@@ -30,11 +30,6 @@ LIQUIDITY_VOL_WINDOW_DAYS = 30    # window for median volume calculation
 MIN_OBS_DENSITY = 0.5             # min fraction of trailing-90d days with a price
 LISTING_STALENESS_DAYS = 7        # max days since last price to be tradeable
 
-# --- Backward-compat alias (used by eligibility.py pre-R2 redesign) ---
-# Task R2 will replace this with the MC + median-volume gate; until then the
-# existing eligibility tests need the $1M ADV threshold to remain importable.
-MIN_ADV_USD = MIN_MEDIAN_VOL_USD  # alias: will be removed in Task R2
-
 # --- Universe panel grid ---
 UNIVERSE_GRID_FREQ = "D"          # daily grid (guide §1.1 "rebuild daily")
 

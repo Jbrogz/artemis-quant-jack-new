@@ -7,9 +7,11 @@ long ``[date, symbol, eligible, adv_30d, gated]`` panel that:
     later collapsed or delisted. They are kept as rows; they simply become
     ineligible once they no longer pass the as-of filters. Dropping them is the
     survivorship bias the guide forbids.
-  - rebuilds Task-4 eligibility per (symbol, date), strictly point-in-time,
-  - computes trailing-30d average daily USD volume (``adv_30d``) from volume
-    rows dated ``<= date`` only (no look-ahead),
+  - rebuilds point-in-time eligibility per (symbol, date) using the rev-3
+    liquidity gate (MC floor + robust-but-sustained trailing-window 24H volume),
+    plus obs-density and tradeability/staleness checks (spec §3.5, §4 Stage 1.1),
+  - reports ``adv_30d`` = the trailing-30d ADV (sum of positive prints divided
+    by the full window) used by the liquidity gate, point-in-time,
   - applies a **minimum-universe gate**: a date with fewer than
     ``MIN_ELIGIBLE_NAMES`` eligible coins is marked ``gated=True`` (the
     rebalance is skipped downstream), using as-of information only.
@@ -21,48 +23,117 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from amom.config import MIN_ELIGIBLE_NAMES
+from amom.config import (
+    LIQUIDITY_VOL_WINDOW_DAYS,
+    MIN_ELIGIBLE_NAMES,
+    MIN_HISTORY_DAYS,
+)
 from amom.universe.coverage import first_seen_dates
-from amom.universe.eligibility import is_eligible
-
-# Trailing window for the average-daily-volume liquidity measure.
-_ADV_WINDOW_DAYS = 30
+from amom.universe.eligibility import is_eligible, window_liquidity
 
 _OUTPUT_COLUMNS = ["date", "symbol", "eligible", "adv_30d", "gated"]
 
 
-def _trailing_adv(
+def _trailing_windows(
     volume_panel: pd.DataFrame, dates: pd.DatetimeIndex, symbols: list[str]
-) -> dict[tuple[pd.Timestamp, str], float]:
-    """Trailing-30d mean daily volume per (date, symbol), point-in-time.
+) -> dict[tuple[pd.Timestamp, str], np.ndarray]:
+    """Trailing-window volume prints per (date, symbol), point-in-time.
 
-    For each grid date ``d`` and symbol, the value is the mean of that symbol's
-    volume observations with ``d - 30d < vol_date <= d``. Volume dated after
-    ``d`` is never consulted. A symbol with no volume in the window maps to NaN.
+    For each grid date ``d`` and symbol, the value is the array of that symbol's
+    volume observations with ``d - LIQUIDITY_VOL_WINDOW_DAYS < vol_date <= d``.
+    Volume dated after ``d`` is never consulted. A symbol with no volume in the
+    window maps to an empty array (fails liquidity).
     """
-    adv: dict[tuple[pd.Timestamp, str], float] = {}
-    window = pd.Timedelta(days=_ADV_WINDOW_DAYS)
+    windows: dict[tuple[pd.Timestamp, str], np.ndarray] = {}
+    window = pd.Timedelta(days=LIQUIDITY_VOL_WINDOW_DAYS)
+    empty = np.array([])
 
     by_symbol = {sym: g for sym, g in volume_panel.groupby("symbol", sort=False)}
     for sym in symbols:
         g = by_symbol.get(sym)
         if g is None:
             for d in dates:
-                adv[(d, sym)] = float("nan")
+                windows[(d, sym)] = empty
             continue
         vol_dates = g["date"].to_numpy()
         vol_vals = g["volume"].to_numpy(dtype=float)
         for d in dates:
             lo = d - window
             in_window = (vol_dates > np.datetime64(lo)) & (vol_dates <= np.datetime64(d))
-            vals = vol_vals[in_window]
-            adv[(d, sym)] = float(np.nanmean(vals)) if vals.size else float("nan")
-    return adv
+            windows[(d, sym)] = vol_vals[in_window]
+    return windows
+
+
+def _trailing_n_obs(
+    price_panel: pd.DataFrame, dates: pd.DatetimeIndex, symbols: list[str]
+) -> dict[tuple[pd.Timestamp, str], int]:
+    """Count of priced days in the trailing-``MIN_HISTORY_DAYS`` window per
+    (date, symbol), point-in-time (the obs-density numerator)."""
+    counts: dict[tuple[pd.Timestamp, str], int] = {}
+    window = pd.Timedelta(days=MIN_HISTORY_DAYS)
+    priced = price_panel.dropna(subset=["price"])
+    by_symbol = {sym: g for sym, g in priced.groupby("symbol", sort=False)}
+    for sym in symbols:
+        g = by_symbol.get(sym)
+        if g is None:
+            for d in dates:
+                counts[(d, sym)] = 0
+            continue
+        pdates = g["date"].to_numpy()
+        for d in dates:
+            lo = d - window
+            in_window = (pdates > np.datetime64(lo)) & (pdates <= np.datetime64(d))
+            counts[(d, sym)] = int(in_window.sum())
+    return counts
+
+
+def _last_price_dates(
+    price_panel: pd.DataFrame, dates: pd.DatetimeIndex, symbols: list[str]
+) -> dict[tuple[pd.Timestamp, str], pd.Timestamp]:
+    """Latest priced date dated ``<= d`` per (date, symbol), point-in-time (the
+    tradeability/staleness anchor). NaT when no price exists at or before ``d``."""
+    last: dict[tuple[pd.Timestamp, str], pd.Timestamp] = {}
+    priced = price_panel.dropna(subset=["price"])
+    by_symbol = {sym: g for sym, g in priced.groupby("symbol", sort=False)}
+    for sym in symbols:
+        g = by_symbol.get(sym)
+        if g is None:
+            for d in dates:
+                last[(d, sym)] = pd.NaT
+            continue
+        pdates = np.sort(g["date"].to_numpy())
+        for d in dates:
+            past = pdates[pdates <= np.datetime64(d)]
+            last[(d, sym)] = pd.Timestamp(past[-1]) if past.size else pd.NaT
+    return last
+
+
+def _mc_as_of(
+    mc_panel: pd.DataFrame, dates: pd.DatetimeIndex, symbols: list[str]
+) -> dict[tuple[pd.Timestamp, str], float]:
+    """Latest market cap dated ``<= d`` per (date, symbol), point-in-time. NaN
+    when no MC observation exists at or before ``d``."""
+    mc: dict[tuple[pd.Timestamp, str], float] = {}
+    by_symbol = {sym: g for sym, g in mc_panel.groupby("symbol", sort=False)}
+    for sym in symbols:
+        g = by_symbol.get(sym)
+        if g is None:
+            for d in dates:
+                mc[(d, sym)] = float("nan")
+            continue
+        g = g.sort_values("date")
+        mc_dates = g["date"].to_numpy()
+        mc_vals = g["mc"].to_numpy(dtype=float)
+        for d in dates:
+            past = mc_vals[mc_dates <= np.datetime64(d)]
+            mc[(d, sym)] = float(past[-1]) if past.size else float("nan")
+    return mc
 
 
 def build_universe_history(
     price_panel: pd.DataFrame,
     volume_panel: pd.DataFrame,
+    mc_panel: pd.DataFrame,
     *,
     dates: pd.DatetimeIndex,
     excluded,
@@ -73,7 +144,9 @@ def build_universe_history(
         price_panel: long DataFrame ``[date, symbol, price]`` covering every
             symbol ever seen (including collapsed/delisted coins).
         volume_panel: long DataFrame ``[date, symbol, volume]`` of daily USD
-            volume. Symbols may be missing (their ADV is NaN -> illiquid).
+            24H volume. Symbols/days may be missing (illiquid -> ineligible).
+        mc_panel: long DataFrame ``[date, symbol, mc]`` of market cap. A symbol
+            with no MC at or before a date maps to NaN (fails the MC floor).
         dates: the rebalance/grid dates to evaluate eligibility on.
         excluded: collection of excluded symbols (stablecoins ∪ wrapped).
 
@@ -89,23 +162,31 @@ def build_universe_history(
         zip(coverage["symbol"], coverage["price_first_date"], strict=True)
     )
 
-    # Every symbol ever seen in EITHER panel (price drives first-seen; volume
-    # may carry symbols with no usable price, kept for completeness).
     symbols = sorted(
         set(price_panel["symbol"]).union(volume_panel["symbol"])
     )
 
-    adv = _trailing_adv(volume_panel, dates, symbols)
+    vol_windows = _trailing_windows(volume_panel, dates, symbols)
+    n_obs = _trailing_n_obs(price_panel, dates, symbols)
+    last_price = _last_price_dates(price_panel, dates, symbols)
+    mc_lookup = _mc_as_of(mc_panel, dates, symbols)
 
     rows = []
     for d in dates:
         for sym in symbols:
-            adv_30d = adv[(d, sym)]
-            first_date = first_by_symbol.get(sym, pd.NaT)
+            window = vol_windows[(d, sym)]
+            _, adv = window_liquidity(window)
             eligible = is_eligible(
-                sym, d, first_date=first_date, adv_30d=adv_30d, excluded=excluded
+                sym,
+                d,
+                first_date=first_by_symbol.get(sym, pd.NaT),
+                last_price_date=last_price[(d, sym)],
+                n_obs_90d=n_obs[(d, sym)],
+                mc=mc_lookup[(d, sym)],
+                vol_window=window,
+                excluded=excluded,
             )
-            rows.append((d, sym, eligible, adv_30d))
+            rows.append((d, sym, eligible, adv))
 
     panel = pd.DataFrame(rows, columns=["date", "symbol", "eligible", "adv_30d"])
     panel["eligible"] = panel["eligible"].astype(bool)
