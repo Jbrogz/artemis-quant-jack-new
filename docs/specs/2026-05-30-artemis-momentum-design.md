@@ -1,6 +1,6 @@
 # Artemis Momentum Factor Book — Design Spec
 
-_Date: 2026-05-30. Status: vetted draft for user review (rev 2)._
+_Date: 2026-05-30. Status: rev 3 — universe corrected after live-Artemis verification (Appendix B)._
 _Authoritative methodology: `docs/reference/factor-book-guide.md` (verbatim extraction of_
 _`Project1_Factor_Book_Guide.docx`). This rev incorporates an adversarial vetting pass against_
 _that guide — see Appendix A for the findings and their resolutions._
@@ -71,26 +71,63 @@ unlock / unverified-circulating-supply detector (§1.3) is a **Size-factor** con
 out of scope; we note that unlock-driven price jumps are a residual momentum-signal risk and
 flag any coin whose market cap jumps mechanically, without excluding it.
 
+### 3.5 Liquidity filter rebuilt on `24H_VOLUME` + market cap (forced by data)
+A live Artemis investigation (Appendix B) found that `30D_VOLUME` is **real-time only**
+(returns a sentinel on any historical pull) and `24H_VOLUME` — the only historical volume
+metric — is **unreliable across the cross-section** (sub-dollar prints, flatlined series such
+as `for` pinned at 75.66). A strict "$1M trailing-30d mean ADV" filter (guide §1.1) is
+therefore not faithfully computable. We instead gate liquidity on **(a) a market-cap floor**
+(`MC` is dense and stable) **and (b) a trailing-30d _median_ of `24H_VOLUME`** above a
+threshold — the median survives broken single-day prints where a mean would not. Broken /
+sub-dollar volume prints are winsorized/flagged. This deviation from the guide's mean-ADV rule
+is disclosed in the report.
+
+### 3.6 No point-in-time catalog → as-of-today enumeration, residual survivorship disclosed
+The Artemis `/asset` catalog (1,013 assets, keyed by a stable `artemis_id` slug) is the
+**programmatic, Artemis-native universe enumeration** — it replaces any hand-curated symbol
+list. But it is an **as-of-today** snapshot with no listing/delisting dates, so it cannot give
+a true point-in-time *membership* set, and coins fully purged from Artemis before query are
+unrecoverable. We reconstruct per-asset listing dates from first-observed price and keep every
+catalog asset that ever collapsed (with its crash carried), but the residual survivorship from
+purged-dead-coins is **quantified and disclosed** (§10), not hidden. Recycled tickers (a single
+ticker reused by a new project, e.g. `ust`) are split into distinct synthetic assets by a
+terminal-drawdown-to-near-zero + gap detector, with `artemis_id` / `coingecko_id` used to
+confirm continuity. Where Artemis already separates twins (`lunc`→`terra` classic vs
+`luna`→`terra2` revival), the `artemis_id` is preferred.
+
 ## 4. Stage-by-stage requirements (mapped to the guide)
 
 ### Stage 1 — Construct the momentum portfolio
 
 **1.1 Universe — point-in-time, dead coins included (guide §1.1).**
-- Pull the **widest available Artemis asset list** (target several hundred assets), not a
-  curated top-N — required to fill quintiles and avoid the survivorship bias the guide flags.
-- **Reconstruct each coin's listing date** from its first Artemis price observation.
-- **Include coins that later collapsed**, final return reflecting the collapse (a 90% crash
-  is a −90% return, not a dropped value).
+- **Enumerate the universe programmatically from Artemis `/asset`** (1,013 assets), persisting
+  an `artemis_id`-keyed registry (`artemis_id`, `symbol`, `coingecko_id`, `title`). Everything
+  downstream keys on the stable `artemis_id`, never the mutable ticker. This is the
+  Artemis-native "widest available asset list" — no hand-curated symbol list (§3.6).
+- **Reconstruct each asset's listing date** from its first observed Artemis price.
+- **Keep every asset that later collapsed**, final return reflecting the collapse (a 90% crash
+  is a −90% return, not a dropped value). **Split recycled tickers** (terminal drawdown→~0 +
+  gap, confirmed via `artemis_id`/`coingecko_id`) into distinct synthetic assets so a revived
+  ticker's healthy series is never spliced onto a dead asset's crash (§3.6).
 - Point-in-time eligibility filters, evaluated as-of each date and **rebuilt daily**:
-  ≥ `MIN_HISTORY_DAYS` (90) price history; ≥ `MIN_ADV_USD` ($1M) trailing-30d ADV; exclude
+  ≥ `MIN_HISTORY_DAYS` (90) price history **with a minimum observation density** (not just
+  calendar age); **liquidity = `MC` floor AND trailing-30d _median_ `24H_VOLUME`** above
+  threshold (§3.5, not mean-ADV); a **tradeability/staleness check** (a non-NaN price within a
+  short grace window of the date, so a stopped/dead coin exits eligibility promptly); exclude
   stablecoins and wrapped tokens.
-- **Minimum-universe gate (point-in-time):** a rebalance date is skipped if fewer than
-  `MIN_ELIGIBLE_NAMES` coins are eligible, so each quintile has ≥ `MIN_BUCKET_SIZE` names. The
-  gate uses only as-of-date information (no look-ahead). Early-history dates with thin
-  quintiles are disclosed; the effective names/quintile over time is reported.
-- **Documented limitation:** if Artemis's own coverage silently drops fully-dead tokens, that
-  residual survivorship is unremovable at source and is disclosed. Mitigated by pulling the
-  broadest list Artemis serves and reconstructing first-seen dates.
+- **Death signal carried in the panel:** the eligibility panel includes `price_last_date` and a
+  point-in-time `delisted_asof` flag so the returns layer (§Stage 1.2) knows exactly where to
+  book the terminal crash return.
+- **Minimum-universe gate (point-in-time):** a rebalance date is gated if fewer than
+  `MIN_ELIGIBLE_NAMES` are eligible, so each quintile has ≥ `MIN_BUCKET_SIZE` names — derived
+  from `MIN_BUCKET_SIZE`, not a coincidental constant. As-of-date info only. Thin early-history
+  quintiles are disclosed; effective names/quintile over time is reported.
+- The eligibility panel is materialized on a **daily** grid (guide §1.1 "rebuild daily");
+  rebalance formation downsamples from it.
+- **Documented, quantified limitation (§10):** the `/asset` catalog is as-of-today, so assets
+  fully purged from Artemis before query are unrecoverable; residual survivorship is quantified
+  (e.g. count of catalog assets showing terminal collapses vs an estimate of purged names), not
+  hidden.
 
 **1.2 Returns (guide §1.2).**
 - Holding return = **simple spot price return** (no funding; §3.1).
@@ -302,9 +339,13 @@ exclusion comes from the ported `STABLECOINS | WRAPPED` sets in `cmom/config.py`
 
 | Guide rule | Where enforced | Test |
 |---|---|---|
-| Survivorship: keep delisted/collapsed coins | `universe/` keeps dead coins; `returns/` carries final crash return | fixture coin crashes to ~0; assert it stays, return ≈ −90% |
-| Point-in-time eligibility, rebuilt daily | `universe/` evaluates filters as-of each date | assert coin ineligible before 90d history |
-| Min-universe gate is point-in-time | `universe/` gate uses as-of data only | assert gate decision unchanged when future data mutated |
+| Universe enumerated from Artemis (no hand-curated list) | `universe/registry` pulls `/asset` (1,013), keys on `artemis_id` | assert registry built from `/asset`, not a literal symbol list |
+| Survivorship: keep delisted/collapsed coins + carry crash | `universe/` keeps dead coins + `price_last_date`/`delisted_asof`; `returns/` books the terminal return | fixture coin crashes ~−95% then stops → present pre-crash, and **realized return ≈ −95% asserted in `returns/`** |
+| Recycled tickers split into distinct assets | `universe/` drawdown→0 + gap splitter; `artemis_id`/`coingecko_id` continuity | fixture ticker dies then a new project reuses it → two synthetic assets, crash carried on the first |
+| Liquidity computable from Artemis (no `30D_VOLUME`) | `universe/` MC floor + trailing-30d **median** `24H_VOLUME` | sparse 2-print window does NOT pass on a mean artifact; median/MC gate behaves correctly |
+| Tradeability / no stale-but-eligible dead coin | `universe/` requires a non-NaN price within a grace window of `as_of` | coin that stops reporting becomes ineligible within the grace window on a daily grid |
+| Point-in-time eligibility, rebuilt daily | `universe/` evaluates filters as-of each date; panel materialized on a **daily** grid | assert coin ineligible before 90d history; assert grid is daily |
+| Min-universe gate derived from `MIN_BUCKET_SIZE`, point-in-time | `universe/` gate uses as-of data only | assert gate decision unchanged when future data mutated; assert per-quintile floor |
 | No look-ahead: signal(t) ≤ close t; enter t+1 close | `factor/` t+1 lag; signal fn forbidden post-t data | assert signal(t) unchanged when t+1.. data mutated |
 | Lookback grid + skip fixed in advance | frozen constants in `config.py`; skip=1 convention | grid/skip are frozen constants |
 | HAC bandwidth covers holding-period overlap | `stats/` maxlags = max(hold−1, ⌈T^¼⌉) | assert maxlags ≥ holding_period_obs − 1 |
@@ -334,17 +375,25 @@ once the key is confirmed.
 
 ## 10. Risks & open limitations
 
-- **Artemis API access (403).** Resolved pending first live probe (single valid key now in
-  `.env`); the build's first step verifies connectivity/coverage. Missing metrics or asset
-  depth are documented and the analysis proceeds without them.
-- **Artemis coverage survivorship.** If Artemis drops fully-dead tokens, residual survivorship
-  is unremovable at source — disclosed, not hidden.
+- **Artemis API access — RESOLVED.** Live probe confirmed `api_ok=true`: BTC daily history
+  from 2013-04-28, and a working `/asset` enumeration of 1,013 assets (Appendix B). The prior
+  403 was a stale duplicate `.env`.
+- **Survivorship — partially mitigated, residual quantified & disclosed.** The universe is the
+  Artemis `/asset` catalog (1,013, `artemis_id`-keyed), which includes many crashed-but-still-
+  listed coins, and recycled tickers are split so real collapses (e.g. `lunc`→`terra`'s
+  −99.99% LUNA crash) are carried. **Residual:** the catalog is *as-of-today* with no PIT
+  membership dates, so assets fully purged from Artemis before query are unrecoverable. The
+  report quantifies this (count of catalog assets showing terminal collapses; note that names
+  with no surviving series anywhere cannot be included) — per "note it and build without it."
+- **Volume reliability.** Only `24H_VOLUME` is historical (`30D_VOLUME` is real-time only) and
+  it has broken prints; liquidity is gated on `MC` + trailing-30d *median* `24H_VOLUME` (§3.5),
+  a disclosed deviation from the guide's mean-ADV rule.
 - **Power / overlapping windows.** 30-day holds yield few non-overlapping observations ⇒ low
   power; handled by the §2.0 bandwidth rule, the bootstrap, the power/effective-n labelling,
   and reliance on the full grid rather than cherry-picking.
 - **Spot vs perp.** Results describe a spot long/short book; perp-specific effects (funding)
   are absent by construction.
-- **Daily execution.** t+1-close fills (not intraday) — a coarser but honest convention.
+- **Daily execution.** t+1-close fills (not intraday — Artemis intraday history is stale/placeholder).
 
 ## 11. Build mechanism
 
@@ -383,3 +432,37 @@ real tests. Resolutions folded into rev 2:
 Items flagged by the reviewer and resolved here: Artemis daily granularity → t+1-close fills
 (§3.2); min-universe gate (§Stage 1.1); size control in spanning (user-approved); effective-n
 power labelling (§2.0). No open items remain for the user beyond final spec approval.
+
+## Appendix B — Live Artemis data-capability findings (rev 2 → rev 3)
+
+The rev-2 universe build was adversarially verified and returned **NEEDS_FIXES**: it had been
+built from a hand-curated 124-symbol list (the survivorship trap), its "dead coins" resolved to
+zombies/revivals carrying no crash, the panel handed no death signal downstream, the crash test
+was vacuous, and ADV used a mean-of-present-rows denominator. A follow-up live investigation of
+the Artemis API established what the platform can actually support; rev 3 (the universe
+remediation plan, `docs/plans/2026-05-30-universe-remediation.md`) is built on these facts:
+
+- **Enumeration:** `GET https://data-svc.artemisxyz.com/asset` (no `/data/api` prefix, no key)
+  returns **1,013 assets**: `artemis_id` (unique stable slug), `symbol`, `coingecko_id`
+  (397/1013), `title`. This is the Artemis-native universe seed; key everything on `artemis_id`.
+  (Note: any path under `/data/api/...` returns HTTP 200 with empty symbols because the first
+  segment is read as a metric name — not a real endpoint.)
+- **Catalog is as-of-today**, no listing/delisting dates → no true PIT membership; purged-dead
+  coins unrecoverable (disclosed, §10/§3.6).
+- **Volume:** only `24H_VOLUME` is historical; `30D_VOLUME` is real-time-only (sentinel on
+  historical pulls — and is wrongly listed in `MARKET_METRICS`, to be fixed). `24H_VOLUME` is
+  unreliable cross-sectionally (sub-dollar prints, `for` flatlined at 75.66) → liquidity uses
+  `MC` + trailing-30d median `24H_VOLUME` (§3.5).
+- **Recycled/zombie tickers:** death usually = price decay→~0 with the series continuing, or a
+  ticker repointed to a new project (`ust`). `lunc`→`terra` holds the real −99.99% LUNA crash;
+  `luna`→`terra2` is the revival. `artemis_id` separates twins kept under different tickers; a
+  drawdown→0 + gap splitter handles single tickers reused over time.
+- **History/granularity:** earliest 2013-04-28; **DAY only** usable (HOUR/MINUTE are
+  stale/placeholder for history).
+
+Rev-3 remediation (per the universe-remediation plan): asset-registry from `/asset`; liquidity
+on MC + median-`24H_VOLUME`; death signal (`price_last_date`/`delisted_asof`) in the panel +
+crash-return assertion moved to `returns/`; recycled-ticker splitter; observation-density and
+tradeability/staleness filters; daily eligibility grid; ADV denominator fixed; quantified
+survivorship disclosure. Re-verified by the same 3-lens adversarial gate; must reach **SOUND**
+before any returns/factor/stats work begins.
