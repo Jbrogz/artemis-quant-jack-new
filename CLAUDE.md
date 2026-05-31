@@ -5,9 +5,9 @@
 Single-factor (**momentum only**) crypto long/short factor book, **all data from Artemis**, following `docs/reference/factor-book-guide.md` strictly. Package `amom`. Repo: `github.com/Jbrogz/artemis-quant-jack-new` (private).
 
 ## Status (2026-05-31)
-Complete through Stage 5, every stage adversarially verified SOUND, 226 tests passing. Deliverables: `docs/report/Artemis_Momentum_Report.pdf` + `Artemis_Momentum_Findings.docx`. **Verified finding: momentum is a rigorous statistical NULL in the pre-registered family → NO-DEPLOY.**
+Complete through Stage 5, every stage adversarially verified SOUND, 250 tests passing. Deliverables: `docs/report/Artemis_Momentum_Report.pdf` + `Artemis_Momentum_Findings.docx`. **Verified finding: momentum is a rigorous statistical NULL in the pre-registered family → NO-DEPLOY.**
 
-**Open work item:** validate the strong `skip≥2` variants (L3d/S3d HAC t=5.0, sign-stable, DSR 0.98, etc.) as a widened/post-hoc family — see `docs/plans/2026-05-31-skip-variant-validation.md`.
+**Resolved (no open work item):** the strong `skip≥2` variants were validated as a widened/post-hoc m=21 family with each OOS spent once — **no deployable candidate** (the m=21-robust survivors L3d/S3d & L14d/S3d fail OOS; the OOS-positive L5d/S2d, L5d/S3d, L1d/S3d are not multiple-testing-robust). The pre-registered skip=1 NULL stands as the headline. See `docs/STATUS.md` and the widened sections of `docs/STAGE2_RESULTS.md` / `docs/STAGE4_RESULTS.md`.
 
 ## Hard rules (do not violate)
 - **`.env` is off-limits** — never open/cat/grep/print it; scripts load `ARTEMIS_API_KEY` via python-dotenv and print only `len`.

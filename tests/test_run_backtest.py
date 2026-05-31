@@ -740,3 +740,128 @@ def test_widened_section_fills_oos_net_sharpe_when_record_supplies_it():
     records["momentum_L3d_S3d"]["oos_net_sharpe"] = -0.42
     text = "\n".join(rb.widened_candidates_section(records))
     assert "-0.42" in text
+
+
+# ===========================================================================
+# Task V3 — per-candidate honest verdict from the (already-spent) OOS numbers
+# ===========================================================================
+# ``candidate_verdict`` is a PURE classifier over the real per-candidate numbers
+# (IS net Sharpe, OOS net Sharpe, IS-vs-OOS gap, whether the variant clears the
+# m=21 Bonferroni under BOTH HAC and bootstrap). It encodes the deployment bar:
+#   * net edge dies (IS net Sharpe <= 0)            -> "works-only-gross"
+#   * OOS net Sharpe non-positive / collapses        -> "fails-OOS"
+#   * OOS positive but NOT m=21-robust under both     -> "marginal"
+#   * OOS positive AND m=21-robust under both         -> "deployable"
+# It is data-driven (it CAN return "deployable"); the no-deployable result on the
+# real numbers falls out of the inputs, not a hardcoded verdict.
+
+
+def test_candidate_verdict_fails_oos_when_oos_sharpe_collapses():
+    # L3d/S3d-shaped: strong IS net (1.542), m=21-robust under both tests, but OOS
+    # net collapses to 0.297 with a large IS-vs-OOS gap -> fails-OOS.
+    v = rb.candidate_verdict(
+        is_net_sharpe=1.542, oos_net_sharpe=0.297, is_oos_gap=1.245,
+        clears_m21_both_tests=True,
+    )
+    assert v == "fails-OOS"
+
+
+def test_candidate_verdict_collapse_rule_overrides_oos_above_floor():
+    # Discriminating: the collapse rule is load-bearing. An OOS net Sharpe that is
+    # ABOVE the overfit floor (0.40 > 0.25) and m=21-robust is STILL fails-OOS when
+    # the IS-vs-OOS gap is large (the edge did not persist) — it must NOT be called
+    # deployable. (Contrast test_..._deployable_when_robust_and_oos_holds, where the
+    # gap is small.) Holding everything else fixed, only the gap separates the two.
+    collapsed = rb.candidate_verdict(
+        is_net_sharpe=1.60, oos_net_sharpe=0.40, is_oos_gap=1.20,
+        clears_m21_both_tests=True,
+    )
+    stable = rb.candidate_verdict(
+        is_net_sharpe=0.55, oos_net_sharpe=0.40, is_oos_gap=0.15,
+        clears_m21_both_tests=True,
+    )
+    assert collapsed == "fails-OOS"
+    assert stable == "deployable"
+
+
+def test_candidate_verdict_fails_oos_when_oos_sharpe_negative():
+    # L14d/S3d-shaped: m=21-robust IS but OOS net NEGATIVE (-0.486) -> fails-OOS.
+    v = rb.candidate_verdict(
+        is_net_sharpe=0.844, oos_net_sharpe=-0.486, is_oos_gap=1.330,
+        clears_m21_both_tests=True,
+    )
+    assert v == "fails-OOS"
+
+
+def test_candidate_verdict_marginal_when_oos_positive_but_not_m21_robust():
+    # L1d/S3d-shaped: OOS net POSITIVE (0.455) but does NOT clear m=21 under BOTH
+    # HAC and bootstrap (HAC clears, bootstrap does not) -> marginal, NOT deployable.
+    v = rb.candidate_verdict(
+        is_net_sharpe=1.010, oos_net_sharpe=0.455, is_oos_gap=0.555,
+        clears_m21_both_tests=False,
+    )
+    assert v == "marginal"
+
+
+def test_candidate_verdict_marginal_for_secondary_oos_positive_specs():
+    # L5d/S2d-shaped (best OOS, 0.714) and L5d/S3d-shaped (0.645): OOS-positive but
+    # NOT m=21-robust -> marginal (not deployable, the multiple-testing gate fails).
+    assert rb.candidate_verdict(
+        is_net_sharpe=0.923, oos_net_sharpe=0.714, is_oos_gap=0.209,
+        clears_m21_both_tests=False,
+    ) == "marginal"
+    assert rb.candidate_verdict(
+        is_net_sharpe=0.908, oos_net_sharpe=0.645, is_oos_gap=0.263,
+        clears_m21_both_tests=False,
+    ) == "marginal"
+
+
+def test_candidate_verdict_can_return_deployable_when_robust_and_oos_holds():
+    # Discriminating: a HYPOTHETICAL candidate with a strong OOS net Sharpe, a
+    # small IS-vs-OOS gap AND m=21-robustness under both tests WOULD be deployable.
+    # This proves the no-deployable result on the real numbers is data-driven, not
+    # hardcoded. (No real candidate meets all three; this is a counterfactual.)
+    v = rb.candidate_verdict(
+        is_net_sharpe=0.90, oos_net_sharpe=0.80, is_oos_gap=0.10,
+        clears_m21_both_tests=True,
+    )
+    assert v == "deployable"
+
+
+def test_candidate_verdict_works_only_gross_when_net_edge_dies():
+    # If the in-sample NET Sharpe is non-positive the edge is killed by costs ->
+    # works-only-gross, regardless of OOS.
+    v = rb.candidate_verdict(
+        is_net_sharpe=-0.05, oos_net_sharpe=0.30, is_oos_gap=-0.35,
+        clears_m21_both_tests=True,
+    )
+    assert v == "works-only-gross"
+
+
+def test_no_widened_candidate_is_deployable_on_the_real_run_numbers():
+    # The real Task-V3 run (numbers in docs/STAGE4_RESULTS.md): apply the verdict
+    # to every candidate with its REAL OOS net Sharpe + its m=21 robustness flag.
+    # NONE is deployable; the two m=21-robust survivors fail OOS, the OOS-positive
+    # specs are only marginal. This is the headline V3 finding.
+    real = {
+        # variant: (is_net, oos_net, gap, clears_m21_both_tests)
+        "momentum_L3d_S3d": (1.542, 0.297, 1.245, True),   # robust, fails OOS
+        "momentum_L14d_S3d": (0.844, -0.486, 1.330, True),  # robust, OOS negative
+        "momentum_L1d_S3d": (1.010, 0.455, 0.555, False),   # marginal (HAC-only)
+        "momentum_L5d_S3d": (0.908, 0.645, 0.263, False),   # OOS+ but not m21
+        "momentum_L5d_S2d": (0.923, 0.714, 0.209, False),   # best OOS but not m21
+    }
+    verdicts = {
+        k: rb.candidate_verdict(
+            is_net_sharpe=a, oos_net_sharpe=b, is_oos_gap=c,
+            clears_m21_both_tests=d,
+        )
+        for k, (a, b, c, d) in real.items()
+    }
+    assert verdicts["momentum_L3d_S3d"] == "fails-OOS"
+    assert verdicts["momentum_L14d_S3d"] == "fails-OOS"
+    assert verdicts["momentum_L1d_S3d"] == "marginal"
+    assert verdicts["momentum_L5d_S3d"] == "marginal"
+    assert verdicts["momentum_L5d_S2d"] == "marginal"
+    # The headline: NO candidate is deployable.
+    assert "deployable" not in verdicts.values()

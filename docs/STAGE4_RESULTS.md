@@ -88,3 +88,41 @@ The primary `momentum_L5d_S1d` posts a positive net Sharpe both in-sample (0.66)
 
 **Net verdict:** consistent with the Stage-2 null and the sign-instability disqualification, momentum on the Artemis spot universe is **not a deployable factor**. The primary's positive OOS Sharpe is a single-regime artifact on a spent-once 30-observation window, not a repeatable edge; it is reported as-is, neither inflated nor suppressed. (Capacity is comfortable at $1M and is **not** the binding constraint.)
 
+## POST-HOC widened skip>=2 candidates (exploratory; Task V1 in-sample)
+
+> **This section is POST-HOC / exploratory.** `skip` was a fixed convention in the pre-registered family (m=7, skip=1), so these skip>=2 variants were originally diagnostics. They are validated here under the widened m=21 family (Bonferroni 0.05/21 = 0.00238; `docs/STAGE2_RESULTS.md`). This does **NOT** overturn the pre-registered skip=1 null above — that result stands. The robust survivors (clear under BOTH HAC and bootstrap) are **L3d/S3d** and **L14d/S3d**; **L1d/S3d is MARGINAL** (clears on the HAC p only, not bootstrap). L5d/S3d and L5d/S2d do **not** clear m=21 and are reported as secondary.
+
+**Key cost risk (guide §1.3):** short lookbacks (L1d/L3d) rebalance into near-reversal territory -> **high turnover, most cost-exposed**. A gross edge can shrink materially net of fees + size-scaled slippage. Gross vs net Sharpe and annualized turnover are shown side by side below; any candidate whose **net edge is killed** (net Sharpe <= 0) is flagged.
+
+| candidate | gross Sharpe | net Sharpe | net Sharpe (2x cost) | net ann ret | ann turnover | capacity (AUM) | OOS net Sharpe |
+|---|---|---|---|---|---|---|---|
+| `momentum_L3d_S3d` | 1.906 | 1.542 | 1.310 | 0.5334 | 24.27 | $98,858,441 | 0.297 |
+| `momentum_L14d_S3d` | 1.071 | 0.844 | 0.681 | 0.3375 | 23.58 | $43,271,895 | -0.486 |
+| `momentum_L1d_S3d` | 1.171 | 1.010 | 0.880 | 0.4211 | 22.09 | $54,171,266 | 0.455 |
+| `momentum_L5d_S3d` | 1.102 | 0.908 | 0.761 | 0.3502 | 22.03 | $73,170,208 | 0.645 |
+| `momentum_L5d_S2d` | 1.069 | 0.923 | 0.810 | 0.4725 | 20.96 | $106,607,762 | 0.714 |
+
+_No candidate's **in-sample** net Sharpe is non-positive — costs do not kill any in-sample edge here. (One candidate, `momentum_L14d_S3d`, does go **net-negative out-of-sample**; that is flagged in the per-candidate verdict below.)_
+
+_The OOS net Sharpe column above is the **real** figure: each candidate's (previously unspent) OOS window was spent **EXACTLY ONCE** (the single guarded read; `open_count == 1`). DSR — already deflated for the 21 trials — is the multiple-testing-aware metric (see `docs/STAGE2_RESULTS.md`); it is not re-derived here._
+
+## Widened conclusion (honest, post-hoc) — per-candidate verdict (Task V3)
+
+> **Scope.** This verdict is **POST-HOC / exploratory and selection-biased** — these skip>=2 variants were chosen *after* seeing they won in-sample. It does **NOT** overturn the pre-registered skip=1 result above (m=7, threshold 0.00714, honest verdict suggestive/NULL, no qualified survivor). The pre-registered null **remains the headline finding.** Each variant's OOS window was spent **exactly once** (per-variant), so these numbers cannot be iterated on.
+
+The deployment bar is the intersection of three independent gates: (1) survive costs (in-sample **net** Sharpe > 0), (2) survive **out-of-sample** net of costs, and (3) be **multiple-testing-robust** — clear the widened m=21 Bonferroni (0.0023810) under **BOTH** the HAC and bootstrap p (applying the project's bootstrap-override-on-disagreement rule consistently at m=21). **No candidate clears all three.**
+
+| candidate | m=21 robust (HAC AND bootstrap) | IS net Sharpe | OOS net Sharpe | IS→OOS gap | ann turnover | verdict |
+|---|---|---|---|---|---|---|
+| `momentum_L3d_S3d` (primary) | **yes** (HAC t=5.015, boot p 0.0002, DSR 0.985) | 1.542 | 0.297 | 1.245 | 24.27 | **fails-OOS** |
+| `momentum_L14d_S3d` | **yes** (HAC t=3.949, boot p 0.0006, DSR 0.805) | 0.844 | **−0.486** | 1.330 | 23.58 | **fails-OOS** (OOS net-negative) |
+| `momentum_L1d_S3d` | **no — MARGINAL** (HAC p 0.00218 clears, boot p 0.0054 does not) | 1.010 | 0.455 | 0.555 | 22.09 | **marginal** (OOS+ but not m=21-robust) |
+| `momentum_L5d_S3d` | no (reported p 0.00391 > 0.00238) | 0.908 | 0.645 | 0.263 | 22.03 | **marginal** (OOS+ but not m=21-robust) |
+| `momentum_L5d_S2d` | no (reported p 0.0108 > 0.00238) | 0.923 | 0.714 | 0.209 | 20.96 | **marginal** (OOS+ but not m=21-robust) |
+
+- **The two genuinely multiple-testing-robust survivors both FAIL out-of-sample.** The primary **`momentum_L3d_S3d`** has the strongest in-sample case in the whole study (gross Sharpe 1.906, net 1.542, HAC t=5.0, DSR 0.985, sign-stable) yet its OOS net Sharpe **collapses to 0.297** (gap 1.245) — a textbook overfit on the highest-turnover (24.3x), most cost-exposed short-lookback variant. **`momentum_L14d_S3d`** is worse: its OOS net Sharpe is **negative (−0.486)** — it loses money out-of-sample.
+- **The candidates that *do* survive OOS are not multiple-testing-robust.** `L5d/S2d` (best OOS, net 0.714, smallest gap 0.209, lowest turnover 20.96x), `L5d/S3d` (0.645) and the marginal `L1d/S3d` (0.455) all post a positive OOS net Sharpe, but none clears the m=21 Bonferroni under both tests — their DSRs (0.558 / 0.675 / 0.870) reflect that the widened-family deflation already discounts them. A positive OOS Sharpe that fails the multiple-testing gate is, on a spent-once ~30-obs window, **not** evidence of a deployable edge.
+- **`momentum_L1d_S3d` is explicitly MARGINAL.** Its HAC p (0.00218) clears the widened threshold but its bootstrap p (0.0054) does not; applying the bootstrap-override-on-disagreement rule consistently at m=21, the bootstrap (non-clearing) verdict governs, so it is reported as **marginal, not a qualified survivor.**
+
+**Widened net verdict: NO deployable candidate.** The intersection of {costs-survived, OOS-survived, m=21-robust under both tests} is **empty**. The robust survivors overfit (one collapses, one goes net-negative OOS); the OOS-positive specs fail the multiple-testing-aware gate. Capacity is comfortable for all five (~$43M–$107M, far above a $1M book) and is **not** the binding constraint. This widened/post-hoc result is **consistent with**, and does not overturn, the pre-registered skip=1 NULL → **NO-DEPLOY** stands. Had any candidate cleared all three gates it would be reported as a genuine post-hoc-discovered positive **with** the post-hoc + selection-bias caveat and a recommendation to **confirm on forward data before any deployment** — but none did, so no such positive exists and the report/findings deliverables need **no** regeneration.
+

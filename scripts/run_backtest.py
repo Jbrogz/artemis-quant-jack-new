@@ -912,6 +912,53 @@ def _oos_overfit_note(oos_net_sharpe: float, is_oos_gap: float) -> str:
     return "OOS Sharpe is positive but the gap quantifies in-sample decay."
 
 
+def candidate_verdict(
+    *,
+    is_net_sharpe: float,
+    oos_net_sharpe: float,
+    is_oos_gap: float,
+    clears_m21_both_tests: bool,
+    oos_floor: float = 0.25,
+    max_stable_gap: float = 0.8,
+) -> str:
+    """Honest per-candidate deployment verdict (Task V3) from the real numbers.
+
+    A PURE classifier over a candidate's cost-aware results. The deployment bar,
+    applied in order:
+
+      * ``works-only-gross`` — the in-sample NET Sharpe is non-positive: costs kill
+        the edge before OOS is even relevant.
+      * ``fails-OOS`` — EITHER the OOS net Sharpe is non-positive / near-zero (at or
+        below ``oos_floor``, the same overfit floor used in ``_oos_overfit_note``),
+        OR the edge **collapses** out-of-sample: a large positive IS-vs-OOS net
+        Sharpe gap (``is_oos_gap > max_stable_gap``) means the OOS retains only a
+        small fraction of the in-sample edge — not a stable, repeatable factor.
+        (This is what catches `momentum_L3d_S3d`: OOS net 0.297 is above the floor
+        but its gap 1.245 shows the in-sample 1.542 collapsed.)
+      * ``marginal`` — OOS net Sharpe survives the floor AND is stable (gap small)
+        but the variant does NOT clear the widened m=21 Bonferroni under BOTH the
+        HAC and bootstrap tests: a positive-but-not-qualified result.
+      * ``deployable`` — OOS net Sharpe survives the floor, is stable (gap small),
+        AND the variant is m=21-robust under both tests. (No real widened candidate
+        meets all three; this branch keeps the classifier data-driven, not a
+        hardcoded null.)
+
+    Never massages toward significance: a positive OOS that either collapses from
+    in-sample or is not multiple-testing-robust is NOT called ``deployable``.
+    """
+    if not np.isfinite(is_net_sharpe) or is_net_sharpe <= 0.0:
+        return "works-only-gross"
+    if not np.isfinite(oos_net_sharpe) or oos_net_sharpe <= oos_floor:
+        return "fails-OOS"
+    # A large positive gap = the in-sample edge collapsed out-of-sample, even if the
+    # OOS Sharpe is still marginally above the floor.
+    if np.isfinite(is_oos_gap) and is_oos_gap > max_stable_gap:
+        return "fails-OOS"
+    if not clears_m21_both_tests:
+        return "marginal"
+    return "deployable"
+
+
 # The descriptive-proxy caveat for the OOS regime cut, carried verbatim in spirit
 # with the Stage-4 markdown caveat: this is a full-sample DESCRIPTIVE partition of
 # the OOS windows, NOT a walk-forward signal — do not over-read it.
