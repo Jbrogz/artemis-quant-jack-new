@@ -76,6 +76,24 @@ COMPARATOR_SPEC = {
     "quantile": QUANTILE,
 }
 
+# --- POST-HOC widened skip>=2 candidates (Task V1; plan 2026-05-31). ---------
+# These are CONVENTION-FIXED specs the user directed to validate, NOT re-selected
+# by maximizing backtest Sharpe. They are the skip>=2 variants that were strong
+# and sign-stable in-sample (the widened m=21 family, docs/STAGE2_RESULTS.md):
+# L3d/S3d (HAC t=5.0, the lead), L14d/S3d, L1d/S3d clear the m=21 Bonferroni
+# 0.05/21=0.00238 (L1d/S3d only on HAC -> MARGINAL); L5d/S3d and L5d/S2d are
+# secondary (do NOT clear). Short lookbacks (L1d/L3d) rebalance into near-reversal
+# territory -> HIGH turnover, the key net-of-cost risk (guide §1.3).
+WIDENED_CANDIDATES = [
+    {"variant": "momentum_L3d_S3d", "lookback": 3, "skip": 3, "quantile": QUANTILE},
+    {"variant": "momentum_L14d_S3d", "lookback": 14, "skip": 3, "quantile": QUANTILE},
+    {"variant": "momentum_L1d_S3d", "lookback": 1, "skip": 3, "quantile": QUANTILE},
+    {"variant": "momentum_L5d_S3d", "lookback": 5, "skip": 3, "quantile": QUANTILE},
+    {"variant": "momentum_L5d_S2d", "lookback": 5, "skip": 2, "quantile": QUANTILE},
+]
+# The widened family's primary is the highest-t lead, L3d/S3d.
+WIDENED_PRIMARY = WIDENED_CANDIDATES[0]
+
 # --- Standard book AUM for the headline run (the capacity sweep spans AUM). --
 DEFAULT_AUM = 1_000_000.0
 
@@ -524,6 +542,95 @@ def _metric_row(name: str, gross_sh: float, net: dict) -> str:
     )
 
 
+def widened_candidates_section(records: dict) -> list[str]:
+    """Markdown for the POST-HOC widened skip>=2 candidates (Task V1).
+
+    A clearly-labelled section that SITS BELOW the pre-registered L5d/S1d +
+    L28d/S1d results (which stay intact). ``records`` maps each variant to the
+    in-sample record from ``characterize_candidate_in_sample`` (gross/net Sharpe,
+    annualized turnover, 2x-cost net, capacity, gross edge). The single guarded
+    OOS read is filled by Task V2; the OOS columns here are placeholders until
+    then. Any candidate whose net Sharpe is non-positive (edge killed net of
+    costs) is flagged explicitly — the short-lookback turnover/reversal risk.
+    """
+    L: list[str] = []
+    L.append("## POST-HOC widened skip>=2 candidates (exploratory; Task V1 in-sample)")
+    L.append("")
+    L.append(
+        "> **This section is POST-HOC / exploratory.** `skip` was a fixed "
+        "convention in the pre-registered family (m=7, skip=1), so these skip>=2 "
+        "variants were originally diagnostics. They are validated here under the "
+        "widened m=21 family (Bonferroni 0.05/21 = 0.00238; `docs/STAGE2_RESULTS.md`). "
+        "This does **NOT** overturn the pre-registered skip=1 null above — that "
+        "result stands. The robust survivors (clear under BOTH HAC and bootstrap) "
+        "are **L3d/S3d** and **L14d/S3d**; **L1d/S3d is MARGINAL** (clears on the "
+        "HAC p only, not bootstrap). L5d/S3d and L5d/S2d do **not** clear m=21 and "
+        "are reported as secondary."
+    )
+    L.append("")
+    L.append(
+        "**Key cost risk (guide §1.3):** short lookbacks (L1d/L3d) rebalance into "
+        "near-reversal territory -> **high turnover, most cost-exposed**. A gross "
+        "edge can shrink materially net of fees + size-scaled slippage. Gross vs "
+        "net Sharpe and annualized turnover are shown side by side below; any "
+        "candidate whose **net edge is killed** (net Sharpe <= 0) is flagged."
+    )
+    L.append("")
+    hdr = (
+        "| candidate | gross Sharpe | net Sharpe | net Sharpe (2x cost) | "
+        "net ann ret | ann turnover | capacity (AUM) | OOS net Sharpe |"
+    )
+    sep = "|" + "|".join(["---"] * 8) + "|"
+    L.append(hdr)
+    L.append(sep)
+    for spec in WIDENED_CANDIDATES:
+        variant = spec["variant"]
+        rec = records.get(variant)
+        if rec is None:
+            L.append(f"| `{variant}` | n/a | n/a | n/a | n/a | n/a | n/a | _V2_ |")
+            continue
+        net = rec["is_net"]
+        net_2x = rec["is_net_2x"]
+        oos = rec.get("oos_net_sharpe", "_filled by V2 (OOS spent once)_")
+        oos_cell = oos if isinstance(oos, str) else _fmt(oos, 3)
+        L.append(
+            f"| `{variant}` | {_fmt(rec['is_gross_sharpe'], 3)} | "
+            f"{_fmt(net['sharpe'], 3)} | {_fmt(net_2x['sharpe'], 3)} | "
+            f"{_fmt(net['annual_return'], 4)} | {_fmt(net['annual_turnover'], 2)} | "
+            f"{_usd(rec['capacity_aum'])} | {oos_cell} |"
+        )
+    L.append("")
+    # Explicit per-candidate flag for any edge killed net of costs.
+    killed = [
+        spec["variant"]
+        for spec in WIDENED_CANDIDATES
+        if (r := records.get(spec["variant"])) is not None
+        and np.isfinite(r["is_net"]["sharpe"]) and r["is_net"]["sharpe"] <= 0.0
+    ]
+    if killed:
+        L.append(
+            "> **Edge killed net of costs (net Sharpe <= 0):** "
+            + ", ".join(f"`{v}`" for v in killed)
+            + " — the gross edge does not survive fees + slippage (the short-"
+            "lookback turnover risk realized)."
+        )
+    else:
+        L.append(
+            "_(No candidate's net Sharpe is non-positive in this section as filled; "
+            "any that turn non-positive once the real numbers are written are "
+            "flagged here.)_"
+        )
+    L.append("")
+    L.append(
+        "_The OOS net Sharpe column is a placeholder until Task V2 spends each "
+        "candidate's (currently unspent) OOS window EXACTLY ONCE. DSR — already "
+        "deflated for the 21 trials — is the multiple-testing-aware metric (see "
+        "`docs/STAGE2_RESULTS.md`); it is not re-derived here._"
+    )
+    L.append("")
+    return L
+
+
 def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
     """Write the human-readable Stage-4 results (gross-vs-net, IS-vs-OOS, robustness)."""
     p = report["primary"]
@@ -744,6 +851,12 @@ def write_markdown(report: dict, path: Path = OUTPUT_MD) -> None:
         "the binding constraint.)"
     )
     L.append("")
+    # --- POST-HOC widened skip>=2 candidates: BELOW the pre-registered results,
+    #     which stay intact above. Only emitted when the runner supplies the
+    #     widened in-sample records (Task V1); absent -> the section is skipped. -
+    widened = report.get("widened")
+    if widened:
+        L.extend(widened_candidates_section(widened))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(L) + "\n")
 
@@ -769,6 +882,52 @@ def characterize_in_sample(
         "is_net_2x": metrics_for(net_2x["equity"], net_2x["trades"]),
         "_net_run": net_run,
         "_gross_eq": gross_eq,
+    }
+
+
+def characterize_candidate_in_sample(
+    price_panel: pd.DataFrame,
+    eligibility_input: pd.DataFrame,
+    holding_is: pd.DataFrame,
+    universe_is: pd.DataFrame,
+    spec: dict,
+    *,
+    aum: float = DEFAULT_AUM,
+) -> dict:
+    """In-sample cost-aware characterization of ONE widened skip>=2 candidate.
+
+    Reuses the SAME helpers as the pre-registered primary — ``build_weight_book``
+    (tested t+1-lag formation, no re-selection), ``characterize_in_sample`` (gross
+    vs net Sharpe + annualized turnover + the 2x-cost rerun), and
+    ``_candidate_for_capacity`` + ``metrics.capacity`` (capacity on the actual
+    per-rebalance *traded* order, not the standing held book). NO OOS rows are
+    read: the book is sliced to ``< OOS_START`` via ``in_sample_slice`` and only
+    the pre-sliced in-sample holding/universe panels are passed in.
+
+    Returns a record carrying the gross/net IS metrics, the 2x-cost rerun, the
+    per-rebalance gross edge and the finite capacity AUM, plus the spec.
+    """
+    book = build_weight_book(price_panel, eligibility_input, spec)
+    book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+    book_is = in_sample_slice(book)
+
+    res = characterize_in_sample(book_is, holding_is, universe_is, aum=aum)
+
+    gross_eq = res["_gross_eq"]
+    gross_edge = (
+        float(gross_eq["gross_return"].iloc[1:].mean()) if len(gross_eq) > 1 else float("nan")
+    )
+    cand = _candidate_for_capacity(universe_is, res["_net_run"]["trades"], gross_edge)
+    capacity_aum = capacity(cand, trade_cost)["capacity_aum"]
+
+    return {
+        "spec": spec,
+        "is_gross_sharpe": res["is_gross_sharpe"],
+        "is_net": res["is_net"],
+        "is_net_2x": res["is_net_2x"],
+        "gross_edge": gross_edge,
+        "capacity_aum": capacity_aum,
+        "_net_run": res["_net_run"],
     }
 
 
@@ -941,6 +1100,25 @@ def main() -> int:
         print(f"    OOS gross Sharpe {oos_gross_sh:+.3f} | net Sharpe {oos_net['sharpe']:+.3f}")
         print(f"    IS-OOS net Sharpe gap {gap:+.3f}")
         print()
+
+    # =======================================================================
+    # POST-HOC widened skip>=2 candidates: IN-SAMPLE characterization (Task V1).
+    # Reuses the in-sample panels above (date < OOS_START) and the same helpers
+    # as the pre-registered specs — NO OOS row is read here (the OOS window for
+    # these candidates is unspent and stays sealed for Task V2). The OOS-net
+    # column in the markdown is a V2 placeholder.
+    # =======================================================================
+    widened_records: dict = {}
+    for spec in WIDENED_CANDIDATES:
+        rec = characterize_candidate_in_sample(
+            price_panel, eligibility, holding_is, universe_is, spec
+        )
+        widened_records[spec["variant"]] = rec
+        print(f"  [widened] {spec['variant']}")
+        print(f"    IS gross Sharpe {rec['is_gross_sharpe']:+.3f} | "
+              f"net Sharpe {rec['is_net']['sharpe']:+.3f} | "
+              f"ann turnover {rec['is_net']['annual_turnover']:.2f}x")
+    report["widened"] = widened_records
 
     write_markdown(report)
     print(f"  wrote {BACKTEST_DIR / 'equity.parquet'} (+ positions, trades)")

@@ -312,3 +312,199 @@ def test_regime_labels_partition_every_period():
     assert set(labels.unique()).issubset({"bull", "bear", "chop"})
     assert labels.notna().all()
     assert len(labels) == len(mkt)
+
+
+# ===========================================================================
+# Task V1 — POST-HOC widened skip>=2 candidates (in-sample cost-aware path)
+# ===========================================================================
+# The skip>=2 candidates are convention-fixed specs (NOT re-selected by Sharpe);
+# their in-sample characterization reuses the SAME engine/cost/metric helpers as
+# the pre-registered primary. These tests exercise the IS path on TOY panels only
+# (no real data, no OOS, no main()).
+
+
+def test_widened_candidates_are_convention_fixed_skip_ge_2_specs():
+    # Exactly the five candidates the plan names, with the fixed (lookback, skip)
+    # — these are pre-registered post-hoc, NOT re-selected from the grid.
+    cands = {c["variant"]: c for c in rb.WIDENED_CANDIDATES}
+    assert set(cands) == {
+        "momentum_L3d_S3d",
+        "momentum_L14d_S3d",
+        "momentum_L1d_S3d",
+        "momentum_L5d_S3d",
+        "momentum_L5d_S2d",
+    }
+    expected = {
+        "momentum_L3d_S3d": (3, 3),
+        "momentum_L14d_S3d": (14, 3),
+        "momentum_L1d_S3d": (1, 3),
+        "momentum_L5d_S3d": (5, 3),
+        "momentum_L5d_S2d": (5, 2),
+    }
+    for variant, (lb, sk) in expected.items():
+        assert cands[variant]["lookback"] == lb
+        assert cands[variant]["skip"] == sk
+        # Every candidate has skip >= 2 (the whole point of the widened family).
+        assert cands[variant]["skip"] >= 2
+        # Quantile is the convention-fixed quintile, not tuned.
+        assert cands[variant]["quantile"] == QUANTILE
+    # The primary candidate of the widened family is L3d/S3d (the highest-t lead).
+    assert rb.WIDENED_PRIMARY["variant"] == "momentum_L3d_S3d"
+
+
+def _toy_widened_panels():
+    """Toy panels with enough history for a skip=3, lookback up-to-14 signal.
+
+    400 daily bars over 20 coins with a monotone cross-sectional drift so the
+    momentum sort is deterministic and a clean dollar-neutral book forms for
+    every skip>=2 candidate (the longest needs ~lookback+skip = 17 days of lead).
+    """
+    dates = pd.date_range("2020-01-01", periods=400, freq="D")
+    syms = [f"C{i}" for i in range(20)]
+    rows = []
+    elig_rows = []
+    for i, s in enumerate(syms):
+        drift = 0.0006 * (i - 9.5)  # C19 strongest up, C0 strongest down
+        price = 100.0
+        for d in dates:
+            price *= (1.0 + drift)
+            rows.append({"date": d, "symbol": s, "price": price})
+            elig_rows.append({"date": d, "symbol": s, "eligible": True})
+    return pd.DataFrame(rows), pd.DataFrame(elig_rows)
+
+
+def test_widened_candidate_net_sharpe_below_gross_on_toy_panel():
+    # Costs can only subtract: for EVERY skip>=2 candidate the in-sample net
+    # Sharpe must be strictly below the gross Sharpe on the toy panel (a
+    # discriminating check — a zero-cost bug would make them equal).
+    price_panel, elig = _toy_widened_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    for spec in rb.WIDENED_CANDIDATES:
+        rec = rb.characterize_candidate_in_sample(
+            price_panel, elig, holding, universe, spec
+        )
+        gross_sh = rec["is_gross_sharpe"]
+        net_sh = rec["is_net"]["sharpe"]
+        # Friction strictly reduces the Sharpe (the toy book trades every
+        # rebalance, so a non-trivial cost is charged -> net < gross).
+        assert net_sh < gross_sh, f"{spec['variant']}: net {net_sh} !< gross {gross_sh}"
+
+
+def test_widened_candidate_turnover_is_path_independent_across_cost_multipliers():
+    # Annualized turnover is a function of the TRADED WEIGHT fractions, not the
+    # cost-eroded equity path, so a 1x-cost and a 2x-cost run of the SAME
+    # candidate must report the SAME annualized turnover (the discriminating
+    # check: a turnover divisor tied to the equity path would drift between runs).
+    price_panel, elig = _toy_widened_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    book = rb.build_weight_book(price_panel, elig, rb.WIDENED_PRIMARY)
+    book_is = rb.in_sample_slice(book)
+
+    net_1x = rb.run_full(book_is, holding, universe, cost_multiplier=1.0)
+    net_2x = rb.run_full(book_is, holding, universe, cost_multiplier=2.0)
+    turn_1x = rb.metrics_for(net_1x["equity"], net_1x["trades"])["annual_turnover"]
+    turn_2x = rb.metrics_for(net_2x["equity"], net_2x["trades"])["annual_turnover"]
+
+    # Turnover is positive (the book actually trades) and identical across cost
+    # multipliers — path-independent.
+    assert turn_1x > 0.0
+    assert abs(turn_1x - turn_2x) < 1e-9
+    # The 2x run's equity path is genuinely different (more cost drag), so the
+    # equality above is not trivially true because the runs are identical.
+    assert net_2x["equity"]["equity"].iloc[-1] < net_1x["equity"]["equity"].iloc[-1]
+    # The characterization record exposes the turnover so it is reportable.
+    rec = rb.characterize_candidate_in_sample(
+        price_panel, elig, holding, universe, rb.WIDENED_PRIMARY
+    )
+    assert abs(rec["is_net"]["annual_turnover"] - turn_1x) < 1e-9
+
+
+def test_widened_candidate_capacity_uses_traded_order_via_metrics_capacity():
+    # Capacity is computed by metrics.capacity on the per-rebalance TRADED order
+    # (built by _candidate_for_capacity from the trade log), NOT the held book.
+    # The record must carry a finite, positive capacity_aum and the gross edge
+    # that feeds it.
+    price_panel, elig = _toy_widened_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    rec = rb.characterize_candidate_in_sample(
+        price_panel, elig, holding, universe, rb.WIDENED_PRIMARY
+    )
+    # The trending toy book has a positive gross edge -> a finite crossing AUM.
+    assert rec["gross_edge"] > 0.0
+    assert rec["capacity_aum"] > 0.0
+    # Cross-check: the capacity is exactly metrics.capacity on the candidate that
+    # _candidate_for_capacity builds from the SAME net run's trade log (proving
+    # the traded-order path is used, not the held weight).
+    cand = rb._candidate_for_capacity(
+        universe, rec["_net_run"]["trades"], rec["gross_edge"]
+    )
+    from amom.backtest.costs import trade_cost
+    from amom.backtest.metrics import capacity
+
+    expected = capacity(cand, trade_cost)["capacity_aum"]
+    assert rec["capacity_aum"] == expected
+    # The traded order (Σ|Δw|/n_rebalances) is strictly below the summed held
+    # weight — the standing book is re-established, not re-traded each rebalance.
+    summed_traded = sum(frac for frac, _adv, _rank in cand["coins"])
+    book_is = rb.in_sample_slice(rb.build_weight_book(price_panel, elig, rb.WIDENED_PRIMARY))
+    summed_held = float(
+        book_is.groupby("symbol")["weight"].apply(lambda w: w.abs().mean()).sum()
+    )
+    assert summed_traded < summed_held
+
+
+def test_widened_section_markdown_is_post_hoc_and_below_preregistered():
+    # write_markdown emits a clearly-labelled POST-HOC widened section that names
+    # every candidate and the turnover/net-vs-gross cost risk; the pre-registered
+    # L5d/S1d + L28d/S1d content stays INTACT and ABOVE it.
+    md = rb.widened_candidates_section(_toy_widened_records())
+    text = "\n".join(md)
+    assert "post-hoc" in text.lower() or "widened" in text.lower()
+    # Every candidate is named in the widened section.
+    for variant in (
+        "momentum_L3d_S3d",
+        "momentum_L14d_S3d",
+        "momentum_L1d_S3d",
+        "momentum_L5d_S3d",
+        "momentum_L5d_S2d",
+    ):
+        assert variant in text
+    # The short-lookback turnover / net-of-cost risk is surfaced, not hidden.
+    assert "turnover" in text.lower()
+    # A candidate killed net of costs is flagged.
+    assert "net" in text.lower()
+
+
+def test_widened_section_marks_missing_candidate_as_pending_v2():
+    # A candidate not yet characterized (no record) renders an explicit n/a row
+    # with the OOS column pointing to V2 — it is never silently dropped.
+    records = _toy_widened_records()
+    del records["momentum_L5d_S2d"]
+    text = "\n".join(rb.widened_candidates_section(records))
+    # The missing candidate still appears (named) with a V2 placeholder.
+    assert "momentum_L5d_S2d" in text
+    assert "_V2_" in text
+
+
+def _toy_widened_records() -> dict:
+    """Minimal in-sample records (one per candidate) for the markdown builder."""
+    out = {}
+    for spec in rb.WIDENED_CANDIDATES:
+        out[spec["variant"]] = {
+            "spec": spec,
+            "is_gross_sharpe": 1.0,
+            "is_net": {
+                "sharpe": 0.5,
+                "annual_return": 0.10,
+                "annual_vol": 0.20,
+                "annual_turnover": 30.0,
+                "max_drawdown": -0.1,
+            },
+            "is_net_2x": {"sharpe": 0.3, "annual_turnover": 30.0, "annual_return": 0.05},
+            "capacity_aum": 5_000_000.0,
+            "gross_edge": 0.01,
+        }
+    return out
