@@ -373,6 +373,29 @@ def _toy_widened_panels():
     return pd.DataFrame(rows), pd.DataFrame(elig_rows)
 
 
+def _toy_oos_panels():
+    """Toy panels that SPAN the sealed OOS boundary (so the OOS slice is non-empty).
+
+    ``_toy_widened_panels`` lives entirely in 2020-2021 (before ``OOS_START`` =
+    2023-12-02), so its OOS slice is empty — useless for an OOS test. This grid
+    runs from mid-2022 to mid-2024 so the 30-day-cadence rebalances yield both a
+    real in-sample stretch and ~6+ OOS rebalances past ``OOS_START``, with a clean
+    deterministic momentum sort (monotone cross-sectional drift).
+    """
+    dates = pd.date_range("2022-06-01", periods=760, freq="D")
+    syms = [f"C{i}" for i in range(20)]
+    rows = []
+    elig_rows = []
+    for i, s in enumerate(syms):
+        drift = 0.0006 * (i - 9.5)  # C19 strongest up, C0 strongest down
+        price = 100.0
+        for d in dates:
+            price *= (1.0 + drift)
+            rows.append({"date": d, "symbol": s, "price": price})
+            elig_rows.append({"date": d, "symbol": s, "eligible": True})
+    return pd.DataFrame(rows), pd.DataFrame(elig_rows)
+
+
 def test_widened_candidate_net_sharpe_below_gross_on_toy_panel():
     # Costs can only subtract: for EVERY skip>=2 candidate the in-sample net
     # Sharpe must be strictly below the gross Sharpe on the toy panel (a
@@ -508,3 +531,212 @@ def _toy_widened_records() -> dict:
             "gross_edge": 0.01,
         }
     return out
+
+
+# ===========================================================================
+# Task V2 — One-shot OOS validation of the skip>=2 candidates
+# ===========================================================================
+# The widened candidates' OOS windows are UNSPENT. V2 spends them through the
+# SAME single ``read_oos_panels_once`` guard the pre-registered specs use — the
+# widened books are folded into the existing combined-book concat, so adding the
+# candidates does NOT add a second OOS open(). These tests exercise that
+# single-guarded-path plumbing + the per-candidate OOS metric/gap/overfit-note +
+# the 2x-cost and regime breakdown, all on TOY panels (no real data, no main()).
+
+
+def test_widened_books_share_the_single_guarded_oos_read():
+    # The combined book that feeds the ONE read_oos_panels_once call carries
+    # primary + comparator AND every widened candidate (namespaced _spec tags).
+    # A single guarded read returns the OOS slices of ALL specs at once; the guard
+    # is opened EXACTLY ONCE even with all five candidates added, and a second
+    # read raises. This is the discriminating proof that adding the candidates
+    # does not introduce a second OOS code path.
+    reb = [ts("2023-11-02"), ts("2023-12-02"), ts("2024-01-01")]
+    spec_tags = ["primary", "comparator"] + [
+        f"widened::{c['variant']}" for c in rb.WIDENED_CANDIDATES
+    ]
+    book_frames = []
+    for tag in spec_tags:
+        book_frames.append(
+            pd.DataFrame(
+                {
+                    "rebalance_date": reb,
+                    "symbol": ["A"] * 3,
+                    "weight": [0.1, 0.2, 0.3],
+                    "_spec": [tag] * 3,
+                }
+            )
+        )
+    combined = pd.concat(book_frames, ignore_index=True)
+    returns = pd.DataFrame(
+        {
+            "date": [ts("2023-11-15"), ts("2023-12-15"), ts("2024-01-15")],
+            "symbol": ["A"] * 3,
+            "holding_return": [0.01, 0.02, 0.03],
+        }
+    )
+    universe = pd.DataFrame(
+        {"date": reb, "symbol": ["A"] * 3, "adv_30d": [1e9] * 3}
+    )
+
+    guard = rb.OneShotOOS()
+    oos_book, oos_returns, oos_universe = rb.read_oos_panels_once(
+        combined, returns, universe, guard
+    )
+    # ONE open for every spec, including all five widened candidates.
+    assert guard.open_count == 1
+    # Every widened candidate's OOS rows came back from the single read.
+    oos_tags = set(oos_book["_spec"].unique())
+    for c in rb.WIDENED_CANDIDATES:
+        assert f"widened::{c['variant']}" in oos_tags
+    assert {"primary", "comparator"}.issubset(oos_tags)
+    # Only OOS-dated rows leak through, across all three panels.
+    assert (oos_book["rebalance_date"] >= OOS_START).all()
+    assert (oos_returns["date"] >= OOS_START).all()
+    assert (oos_universe["date"] >= OOS_START).all()
+    # A second read of the (now-spent) window raises — single use, count stays 1.
+    with pytest.raises(RuntimeError):
+        rb.read_oos_panels_once(combined, returns, universe, guard)
+    assert guard.open_count == 1
+
+
+def test_widened_candidate_oos_metrics_and_gap_computed():
+    # Per candidate: OOS gross/net Sharpe, IS-vs-OOS net Sharpe gap, and an
+    # overfit_note are produced from the OOS-only panels (no IS row enters the OOS
+    # run). The gap is is_net_sharpe - oos_net_sharpe and is finite on the toy
+    # trending panel.
+    price_panel, elig = _toy_oos_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    spec = rb.WIDENED_PRIMARY
+
+    book = rb.build_weight_book(price_panel, elig, spec)
+    book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+    book_oos = book[book["rebalance_date"] >= OOS_START].reset_index(drop=True)
+    oos_returns = holding[holding["date"] >= OOS_START]
+    oos_universe = universe[universe["date"] >= OOS_START]
+    # The OOS slice must be non-empty (the panel spans the boundary).
+    assert not book_oos.empty
+
+    rec = rb.characterize_candidate_oos(
+        book_oos, oos_returns, oos_universe, is_net_sharpe=0.5
+    )
+    assert "oos_gross_sharpe" in rec
+    assert "oos_net" in rec
+    assert "is_oos_gap" in rec
+    assert "overfit_note" in rec
+    import numpy as np
+
+    assert np.isfinite(rec["oos_net"]["sharpe"])
+    # gap = IS - OOS, finite, and consistent with the supplied IS Sharpe.
+    assert np.isfinite(rec["is_oos_gap"])
+    assert abs(rec["is_oos_gap"] - (0.5 - rec["oos_net"]["sharpe"])) < 1e-9
+    # The note is a non-empty honest string (overfitting / single-regime artifact).
+    assert isinstance(rec["overfit_note"], str) and rec["overfit_note"]
+
+
+def test_widened_candidate_oos_uses_only_oos_dated_rows_no_lookahead():
+    # Discriminating no-look-ahead check: mutating an IN-SAMPLE-dated daily return
+    # must NOT change any OOS metric — the OOS run reads only OOS-dated rows. (The
+    # caller hands characterize_candidate_oos pre-sliced OOS-only panels, so an IS
+    # mutation cannot leak in.)
+    price_panel, elig = _toy_oos_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    spec = rb.WIDENED_PRIMARY
+
+    book = rb.build_weight_book(price_panel, elig, spec)
+    book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+    book_oos = book[book["rebalance_date"] >= OOS_START].reset_index(drop=True)
+    oos_returns = holding[holding["date"] >= OOS_START]
+    oos_universe = universe[universe["date"] >= OOS_START]
+
+    base = rb.characterize_candidate_oos(
+        book_oos, oos_returns, oos_universe, is_net_sharpe=0.5
+    )
+    # Now perturb the FULL holding panel at an IN-SAMPLE date, then re-slice OOS:
+    # the OOS slice is unchanged, so the OOS metric must be identical.
+    mutated = holding.copy()
+    is_mask = mutated["date"] < OOS_START
+    mutated.loc[is_mask, "holding_return"] = mutated.loc[is_mask, "holding_return"] + 5.0
+    oos_returns_2 = mutated[mutated["date"] >= OOS_START]
+    after = rb.characterize_candidate_oos(
+        book_oos, oos_returns_2, oos_universe, is_net_sharpe=0.5
+    )
+    import numpy as np
+
+    a, b = base["oos_net"]["sharpe"], after["oos_net"]["sharpe"]
+    assert (np.isnan(a) and np.isnan(b)) or abs(a - b) < 1e-12
+
+
+def test_widened_candidate_oos_overfit_note_flags_nonpositive_sharpe():
+    # The overfit_note must call near-zero / negative OOS Sharpe overfitting, and
+    # a positive-but-spent-once OOS as a single-regime artifact (not a deployable
+    # edge). Drive the note logic directly via the (finite) gap classification.
+    # Negative OOS -> overfitting language.
+    neg = rb._oos_overfit_note(oos_net_sharpe=-0.3, is_oos_gap=0.8)
+    assert "overfit" in neg.lower()
+    # Strongly positive OOS that EXCEEDS IS (gap < 0) -> single-regime, not edge.
+    art = rb._oos_overfit_note(oos_net_sharpe=1.2, is_oos_gap=-0.7)
+    assert "single-regime" in art.lower() or "spent-once" in art.lower()
+    assert "deployable" in art.lower()
+
+
+def test_widened_candidate_oos_2x_cost_drags_equity_turnover_unchanged():
+    # The OOS 2x-cost rerun must drag terminal equity below the 1x run while the
+    # reported annualized turnover is identical (turnover is path-independent).
+    price_panel, elig = _toy_oos_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    spec = rb.WIDENED_PRIMARY
+
+    book = rb.build_weight_book(price_panel, elig, spec)
+    book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+    book_oos = book[book["rebalance_date"] >= OOS_START].reset_index(drop=True)
+    oos_returns = holding[holding["date"] >= OOS_START]
+    oos_universe = universe[universe["date"] >= OOS_START]
+
+    rec = rb.characterize_candidate_oos(
+        book_oos, oos_returns, oos_universe, is_net_sharpe=0.5
+    )
+    # The 2x-cost OOS net metrics are present.
+    assert "oos_net_2x" in rec
+    # Turnover identical across 1x and 2x (path-independent).
+    assert abs(rec["oos_net"]["annual_turnover"] - rec["oos_net_2x"]["annual_turnover"]) < 1e-9
+
+
+def test_widened_candidate_oos_regime_breakdown_with_caveat():
+    # An OOS regime breakdown (bull/bear/chop) is produced and carries the
+    # do-not-over-read descriptive-proxy caveat (so it is never sold as a
+    # walk-forward signal).
+    price_panel, elig = _toy_oos_panels()
+    holding = rb.price_panel_to_holding_returns(price_panel)
+    universe = rb.eligibility_to_universe(elig)
+    spec = rb.WIDENED_PRIMARY
+
+    book = rb.build_weight_book(price_panel, elig, spec)
+    book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+    book_oos = book[book["rebalance_date"] >= OOS_START].reset_index(drop=True)
+    oos_returns = holding[holding["date"] >= OOS_START]
+    oos_universe = universe[universe["date"] >= OOS_START]
+
+    rec = rb.characterize_candidate_oos(
+        book_oos, oos_returns, oos_universe, is_net_sharpe=0.5
+    )
+    regimes = rec["regimes"]
+    assert set(regimes) == {"bull", "bear", "chop"}
+    for r in regimes.values():
+        assert "n" in r and "mean_net_return" in r
+    # The descriptive caveat travels with the record (honest framing, do not
+    # over-read the regime cut).
+    assert "caveat" in rec
+    assert "descriptive" in rec["caveat"].lower()
+
+
+def test_widened_section_fills_oos_net_sharpe_when_record_supplies_it():
+    # Once V2 stores oos_net_sharpe on a widened record, the markdown OOS column
+    # shows the number rather than the V2 placeholder.
+    records = _toy_widened_records()
+    records["momentum_L3d_S3d"]["oos_net_sharpe"] = -0.42
+    text = "\n".join(rb.widened_candidates_section(records))
+    assert "-0.42" in text

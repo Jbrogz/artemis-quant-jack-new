@@ -885,6 +885,105 @@ def characterize_in_sample(
     }
 
 
+def _oos_overfit_note(oos_net_sharpe: float, is_oos_gap: float) -> str:
+    """Honest one-line characterization of an OOS net Sharpe (Task V2).
+
+    Reuses the SAME classification thresholds as the pre-registered specs in
+    ``main`` so the widened candidates are judged on identical terms: a near-zero
+    / negative OOS Sharpe is reported plainly as overfitting; an OOS that did NOT
+    collapse (gap < 0, i.e. OOS exceeds in-sample) is a single-regime spent-once
+    artifact, NOT a deployable edge; otherwise the positive gap quantifies the
+    in-sample decay. Never massages toward significance.
+    """
+    if not np.isfinite(oos_net_sharpe):
+        return "OOS Sharpe is undefined on the spent-once window."
+    if oos_net_sharpe <= 0.25:
+        return (
+            "OOS Sharpe is near-zero / negative -> the in-sample edge does NOT "
+            "persist out-of-sample (overfitting)."
+        )
+    if np.isfinite(is_oos_gap) and is_oos_gap < 0:
+        return (
+            "OOS Sharpe did NOT collapse (it exceeds in-sample) — but this is a "
+            "single-regime artifact on a spent-once 30-obs window, NOT a "
+            "deployable edge (the widened family is post-hoc; confirm on forward "
+            "data; the regime breakdown is a descriptive cut only)."
+        )
+    return "OOS Sharpe is positive but the gap quantifies in-sample decay."
+
+
+# The descriptive-proxy caveat for the OOS regime cut, carried verbatim in spirit
+# with the Stage-4 markdown caveat: this is a full-sample DESCRIPTIVE partition of
+# the OOS windows, NOT a walk-forward signal — do not over-read it.
+_OOS_REGIME_CAVEAT = (
+    "Do not over-read: this regime cut is a full-sample DESCRIPTIVE partition of "
+    "the spent-once OOS windows, NOT a walk-forward signal — it could not have "
+    "been traded ex-ante, and on only ~30 OOS observations the buckets are tiny. "
+    "It is suggestive context, not evidence of a regime-specific edge."
+)
+
+
+def characterize_candidate_oos(
+    book_oos: pd.DataFrame,
+    oos_returns: pd.DataFrame,
+    oos_universe: pd.DataFrame,
+    *,
+    is_net_sharpe: float,
+    aum: float = DEFAULT_AUM,
+) -> dict:
+    """OOS cost-aware characterization of ONE widened candidate (Task V2).
+
+    Receives panels that are ALREADY sliced to OOS-only rows (the single
+    ``read_oos_panels_once`` guard in ``main`` does the slicing and is the only
+    code path that touches a row dated ``>= OOS_START``). This helper therefore
+    cannot read an OOS row outside that one guarded read, and — because it is
+    handed OOS-only panels — it cannot read an in-sample row either (a strict
+    no-look-ahead boundary: an in-sample mutation cannot change any OOS metric).
+
+    Reuses the SAME helpers as the pre-registered OOS step: ``run_gross_and_net``
+    + ``run_full`` (gross vs net + the 2x-cost rerun), ``metrics_for`` (the §4.5
+    net metric set incl. annualized turnover), and ``regime_breakdown`` /
+    ``regime_labels`` / ``equal_weight_market_return`` for the descriptive regime
+    cut. Returns the OOS gross/net Sharpe, the 2x-cost net metrics, the IS-vs-OOS
+    net Sharpe gap, the honest overfit note, the regime breakdown + its caveat.
+    """
+    oos_gross_eq, oos_net_eq = run_gross_and_net(
+        book_oos, oos_returns, oos_universe, aum=aum
+    )
+    oos_net_run = run_full(book_oos, oos_returns, oos_universe, aum=aum)
+    oos_net_2x_run = run_full(
+        book_oos, oos_returns, oos_universe, aum=aum, cost_multiplier=2.0
+    )
+    oos_net = metrics_for(oos_net_eq, oos_net_run["trades"])
+    oos_net_2x = metrics_for(oos_net_2x_run["equity"], oos_net_2x_run["trades"])
+    oos_gross_sh = gross_sharpe(oos_gross_eq)
+
+    gap = (
+        (is_net_sharpe - oos_net["sharpe"])
+        if np.isfinite(is_net_sharpe) and np.isfinite(oos_net["sharpe"])
+        else float("nan")
+    )
+
+    # Descriptive OOS regime breakdown (same convention as Stage 4; do-not-over-read).
+    oos_dates = pd.DatetimeIndex(sorted(book_oos["rebalance_date"].unique()))
+    labels = regime_labels(
+        equal_weight_market_return(oos_returns, oos_universe, oos_dates)
+    )
+    net_series = oos_net_run["equity"].set_index("date")["net_return"]
+    net_series = net_series.iloc[1:] if len(net_series) > 1 else net_series
+    regimes = regime_breakdown(net_series, labels)
+
+    return {
+        "oos_gross_sharpe": oos_gross_sh,
+        "oos_net": oos_net,
+        "oos_net_2x": oos_net_2x,
+        "is_oos_gap": gap,
+        "overfit_note": _oos_overfit_note(oos_net["sharpe"], gap),
+        "regimes": regimes,
+        "caveat": _OOS_REGIME_CAVEAT,
+    }
+
+
 def characterize_candidate_in_sample(
     price_panel: pd.DataFrame,
     eligibility_input: pd.DataFrame,
@@ -975,6 +1074,15 @@ def main() -> int:
         book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
         books[key] = book
 
+    # --- Widened skip>=2 candidate full weight books (Task V2): built here as a
+    #     pure formation alongside the pre-registered books so their OOS slices
+    #     ride the SAME single guarded read below. No metric reads them yet. -----
+    widened_books: dict[str, pd.DataFrame] = {}
+    for spec in WIDENED_CANDIDATES:
+        wbook = build_weight_book(price_panel, eligibility, spec)
+        wbook["rebalance_date"] = pd.to_datetime(wbook["rebalance_date"]).dt.normalize()
+        widened_books[spec["variant"]] = wbook
+
     # =======================================================================
     # IN-SAMPLE characterization (rows < OOS_START only; OOS untouched)
     # =======================================================================
@@ -1028,9 +1136,18 @@ def main() -> int:
     # (spec §2.8 / §4.6). The engine then sees OOS-only panels, so OOS-once is
     # ENFORCED across every input, not merely conventional. The combined OOS book
     # is split back per spec; no further OOS read occurs.
+    # The combined book carries the pre-registered specs AND every widened
+    # candidate (namespaced `widened::<variant>` tags). Folding the widened books
+    # into this ONE concat means adding the candidates does NOT add a second OOS
+    # read path — the single guard.open() below stays at open_count == 1 (Task V2).
     oos_guard = OneShotOOS()
     combined_books = pd.concat(
-        [books[k].assign(_spec=k) for k in specs], ignore_index=True
+        [books[k].assign(_spec=k) for k in specs]
+        + [
+            widened_books[v].assign(_spec=f"widened::{v}")
+            for v in widened_books
+        ],
+        ignore_index=True,
     )
     oos_combined, oos_returns, oos_universe = read_oos_panels_once(
         combined_books, returns_long, universe_long, oos_guard
@@ -1118,6 +1235,39 @@ def main() -> int:
         print(f"    IS gross Sharpe {rec['is_gross_sharpe']:+.3f} | "
               f"net Sharpe {rec['is_net']['sharpe']:+.3f} | "
               f"ann turnover {rec['is_net']['annual_turnover']:.2f}x")
+
+    # =======================================================================
+    # POST-HOC widened skip>=2 candidates: spend their (unspent) OOS window —
+    # already read EXACTLY ONCE through the single guard above (open_count == 1).
+    # Each candidate's OOS rows are split out of the SAME combined OOS book; the
+    # OOS gross/net Sharpe, the IS-vs-OOS net Sharpe gap, the 2x-cost rerun and
+    # the descriptive regime breakdown reuse the pre-registered helpers, and the
+    # OOS net Sharpe is stored so the markdown fills its column (Task V2).
+    # =======================================================================
+    for spec in WIDENED_CANDIDATES:
+        variant = spec["variant"]
+        rec = widened_records[variant]
+        book_oos = (
+            oos_combined[oos_combined["_spec"] == f"widened::{variant}"]
+            .drop(columns="_spec")
+            .reset_index(drop=True)
+        )
+        oos = characterize_candidate_oos(
+            book_oos, oos_returns, oos_universe,
+            is_net_sharpe=rec["is_net"]["sharpe"],
+        )
+        rec["oos_gross_sharpe"] = oos["oos_gross_sharpe"]
+        rec["oos_net"] = oos["oos_net"]
+        rec["oos_net_2x"] = oos["oos_net_2x"]
+        rec["oos_net_sharpe"] = oos["oos_net"]["sharpe"]
+        rec["is_oos_gap"] = oos["is_oos_gap"]
+        rec["oos_overfit_note"] = oos["overfit_note"]
+        rec["oos_regimes"] = oos["regimes"]
+        rec["oos_regime_caveat"] = oos["caveat"]
+        print(f"  [widened-OOS] {variant}")
+        print(f"    OOS gross Sharpe {oos['oos_gross_sharpe']:+.3f} | "
+              f"net Sharpe {oos['oos_net']['sharpe']:+.3f} | "
+              f"IS-OOS gap {oos['is_oos_gap']:+.3f}")
     report["widened"] = widened_records
 
     write_markdown(report)
