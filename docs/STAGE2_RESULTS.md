@@ -6,7 +6,7 @@ _In-sample slice only (rebalance_date < OOS_START = 2023-12-02; the OOS window i
 
 - **Honest verdict (selection family): `suggestive`.**
 - Pre-registered selection family: **7 tests** (7 lookbacks at skip=1); Bonferroni threshold = 0.05 / 7 = 0.00714.
-- **Total mean-return tests (one per variant): 21.**
+- **Total tests run (selection + diagnostics): 21.**
 - Bonferroni survivors: `momentum_L5d_S1d` **(DISQUALIFIED — fails §2.6 sign-stability; survives only via the bootstrap-override rule, HAC p=0.0081 > 0.00714)**.
 - Grid PBO/CSCV (probability of backtest overfitting): 0.114 (over 69 common in-sample dates).
 
@@ -16,32 +16,51 @@ The **HAC** t-stat (Newey-West, autocorrelation-robust) is the reported mean-ret
 
 | variant | n | naive t | HAC t | HLZ | ann ret | Sharpe (SE) | autocorr | span α | span α t | HAC p | boot p | disagree | holds sign | power | DSR | survives |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `momentum_L14d_S1d` | 69 | 1.902 | 1.945 | not_significant | 0.5128 | 0.799 (0.425) | no | 0.02310 | 1.597 | 0.0259 | 0.0354 | no | yes | powered | 0.308 | no |
-| `momentum_L1d_S1d` | 69 | -1.247 | -1.300 | not_significant | -0.3078 | -0.524 (0.422) | no | -0.02502 | -1.457 | 0.9032 | 0.9102 | no | **no** | powered | 0.000 | no |
-| `momentum_L28d_S1d` | 69 | 0.911 | 0.955 | not_significant | 0.2791 | 0.383 (0.421) | no | -0.00197 | -0.104 | 0.1698 | 0.1780 | no | yes | powered | 0.060 | no |
-| `momentum_L3d_S1d` | 69 | 1.606 | 1.533 | not_significant | 0.4098 | 0.674 (0.424) | no | 0.01265 | 0.811 | 0.0626 | 0.0656 | no | **no** | powered | 0.198 | no |
-| `momentum_L56d_S1d` | 69 | 0.935 | 0.756 | not_significant | 0.2683 | 0.393 (0.525) | yes | 0.00777 | 0.351 | 0.2249 | 0.2024 | no | **no** | powered | 0.062 | no |
-| `momentum_L5d_S1d` | 69 | 2.315 | 2.403 | suggestive | 0.6163 | 0.972 (0.428) | no | 0.04631 | 2.206 | 0.0081 | 0.0058 | yes | **no** | powered | 0.460 | **yes** |
-| `momentum_L7d_S1d` | 69 | 2.068 | 1.887 | not_significant | 0.6209 | 0.868 (0.426) | no | 0.04020 | 1.614 | 0.0296 | 0.0214 | no | yes | powered | 0.352 | no |
+| `momentum_L14d_S1d` | 69 | 1.902 | 1.945 | not_significant | 0.5128 | 0.799 (0.425) | no | 0.02343 | 1.605 | 0.0259 | 0.0354 | no | yes | powered | 0.308 | no |
+| `momentum_L1d_S1d` | 69 | -1.247 | -1.300 | not_significant | -0.3078 | -0.524 (0.422) | no | -0.02494 | -1.450 | 0.9032 | 0.9102 | no | **no** | powered | 0.000 | no |
+| `momentum_L28d_S1d` | 69 | 0.911 | 0.955 | not_significant | 0.2791 | 0.383 (0.421) | no | -0.00166 | -0.088 | 0.1698 | 0.1780 | no | yes | powered | 0.060 | no |
+| `momentum_L3d_S1d` | 69 | 1.606 | 1.533 | not_significant | 0.4098 | 0.674 (0.424) | no | 0.01286 | 0.822 | 0.0626 | 0.0656 | no | **no** | powered | 0.198 | no |
+| `momentum_L56d_S1d` | 69 | 0.935 | 0.756 | not_significant | 0.2683 | 0.393 (0.525) | yes | 0.00798 | 0.360 | 0.2249 | 0.2024 | no | **no** | powered | 0.062 | no |
+| `momentum_L5d_S1d` | 69 | 2.315 | 2.403 | suggestive | 0.6163 | 0.972 (0.428) | no | 0.04651 | 2.211 | 0.0081 | 0.0058 | yes | **no** | powered | 0.460 | **yes** |
+| `momentum_L7d_S1d` | 69 | 2.068 | 1.887 | not_significant | 0.6209 | 0.868 (0.426) | no | 0.04047 | 1.621 | 0.0296 | 0.0214 | no | yes | powered | 0.352 | no |
 
 ## Diagnostics (skip {2,3}) — reported, not selected
 
 | variant | n | naive t | HAC t | HLZ | ann ret | Sharpe (SE) | autocorr | span α | span α t | HAC p | boot p | disagree | holds sign | power | DSR | survives |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `momentum_L14d_S2d` | 69 | 2.369 | 2.298 | suggestive | 0.6492 | 0.995 (0.428) | no | 0.03656 | 2.197 | 0.0108 | 0.0140 | no | yes | powered | 0.481 | no |
-| `momentum_L14d_S3d` | 69 | 3.241 | 3.949 | significant | 0.8988 | 1.361 (0.436) | no | 0.06042 | 3.888 | 0.0000 | 0.0006 | no | yes | powered | 0.805 | no |
-| `momentum_L1d_S2d` | 69 | 0.075 | 0.069 | not_significant | 0.0288 | 0.032 (0.420) | no | -0.03414 | -1.504 | 0.4724 | 0.4459 | no | **no** | powered | 0.010 | no |
-| `momentum_L1d_S3d` | 69 | 3.338 | 2.851 | suggestive | 1.0432 | 1.402 (0.437) | no | 0.07471 | 2.654 | 0.0022 | 0.0054 | no | yes | powered | 0.870 | no |
-| `momentum_L28d_S2d` | 69 | 0.872 | 0.937 | not_significant | 0.2497 | 0.366 (0.421) | no | 0.00301 | 0.167 | 0.1744 | 0.1758 | no | yes | powered | 0.060 | no |
-| `momentum_L28d_S3d` | 69 | 1.416 | 1.393 | not_significant | 0.3889 | 0.595 (0.423) | no | 0.01918 | 1.061 | 0.0818 | 0.0804 | no | yes | powered | 0.142 | no |
-| `momentum_L3d_S2d` | 69 | 2.766 | 2.378 | suggestive | 1.0109 | 1.161 (0.505) | yes | 0.04369 | 2.105 | 0.0087 | 0.0192 | no | **no** | powered | 0.653 | no |
-| `momentum_L3d_S3d` | 69 | 4.663 | 5.015 | significant | 1.0807 | 1.958 (0.452) | no | 0.08099 | 4.735 | 0.0000 | 0.0002 | no | yes | powered | 0.985 | no |
-| `momentum_L56d_S2d` | 69 | 1.217 | 0.990 | not_significant | 0.3780 | 0.511 (0.522) | yes | 0.00903 | 0.412 | 0.1610 | 0.1466 | no | **no** | powered | 0.099 | no |
-| `momentum_L56d_S3d` | 69 | 1.075 | 0.891 | not_significant | 0.3159 | 0.451 (0.513) | yes | 0.01069 | 0.517 | 0.1866 | 0.1658 | no | **no** | powered | 0.081 | no |
-| `momentum_L5d_S2d` | 69 | 2.508 | 2.588 | suggestive | 0.9616 | 1.053 (0.429) | no | 0.04495 | 2.048 | 0.0048 | 0.0108 | yes | yes | powered | 0.558 | no |
-| `momentum_L5d_S3d` | 69 | 2.857 | 2.660 | suggestive | 0.8167 | 1.200 (0.432) | no | 0.05033 | 2.179 | 0.0039 | 0.0030 | no | yes | powered | 0.675 | no |
-| `momentum_L7d_S2d` | 69 | 2.097 | 2.327 | suggestive | 0.6428 | 0.881 (0.427) | no | 0.03496 | 1.681 | 0.0100 | 0.0116 | no | yes | powered | 0.372 | no |
-| `momentum_L7d_S3d` | 69 | 1.925 | 2.102 | suggestive | 0.5245 | 0.808 (0.426) | no | 0.03522 | 2.075 | 0.0178 | 0.0110 | no | yes | powered | 0.330 | no |
+| `momentum_L14d_S2d` | 69 | 2.369 | 2.298 | suggestive | 0.6492 | 0.995 (0.428) | no | 0.03692 | 2.205 | 0.0108 | 0.0140 | no | yes | powered | 0.481 | no |
+| `momentum_L14d_S3d` | 69 | 3.241 | 3.949 | significant | 0.8988 | 1.361 (0.436) | no | 0.06076 | 3.892 | 0.0000 | 0.0006 | no | yes | powered | 0.805 | no |
+| `momentum_L1d_S2d` | 69 | 0.075 | 0.069 | not_significant | 0.0288 | 0.032 (0.420) | no | -0.03388 | -1.491 | 0.4724 | 0.4459 | no | **no** | powered | 0.010 | no |
+| `momentum_L1d_S3d` | 69 | 3.338 | 2.851 | suggestive | 1.0432 | 1.402 (0.437) | no | 0.07494 | 2.662 | 0.0022 | 0.0054 | no | yes | powered | 0.870 | no |
+| `momentum_L28d_S2d` | 69 | 0.872 | 0.937 | not_significant | 0.2497 | 0.366 (0.421) | no | 0.00329 | 0.182 | 0.1744 | 0.1758 | no | yes | powered | 0.060 | no |
+| `momentum_L28d_S3d` | 69 | 1.416 | 1.393 | not_significant | 0.3889 | 0.595 (0.423) | no | 0.01942 | 1.072 | 0.0818 | 0.0804 | no | yes | powered | 0.142 | no |
+| `momentum_L3d_S2d` | 69 | 2.766 | 2.378 | suggestive | 1.0109 | 1.161 (0.505) | yes | 0.04401 | 2.116 | 0.0087 | 0.0192 | no | **no** | powered | 0.653 | no |
+| `momentum_L3d_S3d` | 69 | 4.663 | 5.015 | significant | 1.0807 | 1.958 (0.452) | no | 0.08106 | 4.743 | 0.0000 | 0.0002 | no | yes | powered | 0.985 | no |
+| `momentum_L56d_S2d` | 69 | 1.217 | 0.990 | not_significant | 0.3780 | 0.511 (0.522) | yes | 0.00931 | 0.425 | 0.1610 | 0.1466 | no | **no** | powered | 0.099 | no |
+| `momentum_L56d_S3d` | 69 | 1.075 | 0.891 | not_significant | 0.3159 | 0.451 (0.513) | yes | 0.01094 | 0.528 | 0.1866 | 0.1658 | no | **no** | powered | 0.081 | no |
+| `momentum_L5d_S2d` | 69 | 2.508 | 2.588 | suggestive | 0.9616 | 1.053 (0.429) | no | 0.04526 | 2.060 | 0.0048 | 0.0108 | yes | yes | powered | 0.558 | no |
+| `momentum_L5d_S3d` | 69 | 2.857 | 2.660 | suggestive | 0.8167 | 1.200 (0.432) | no | 0.05060 | 2.187 | 0.0039 | 0.0030 | no | yes | powered | 0.675 | no |
+| `momentum_L7d_S2d` | 69 | 2.097 | 2.327 | suggestive | 0.6428 | 0.881 (0.427) | no | 0.03529 | 1.691 | 0.0100 | 0.0116 | no | yes | powered | 0.372 | no |
+| `momentum_L7d_S3d` | 69 | 1.925 | 2.102 | suggestive | 0.5245 | 0.808 (0.426) | no | 0.03546 | 2.082 | 0.0178 | 0.0110 | no | yes | powered | 0.330 | no |
+
+## Widened family (skip as a selection axis, m=21) — POST-HOC / exploratory
+
+**This section is post-hoc and exploratory.** In the pre-registered design `skip` was a fixed nuisance convention (`skip = 1`), so the selection family was the 7 lookbacks at skip=1 (`m = 7`) and the skip ∈ {2,3} variants were reported only as diagnostics. Here `skip` is promoted to a third selection axis, giving the full **7 lookbacks × 3 skips = 21** family and the larger Bonferroni penalty `0.05 / 21 = 0.0023810`. This is reported for completeness at the user's direction; it does **NOT** retroactively make the pre-registered skip=1 null a false negative — the skip=1 verdict above stands. Any positive here is a post-hoc / selection-biased finding and must be confirmed on forward data.
+
+- Widened family size: **m = 21**; Bonferroni threshold = 0.05 / 21 = `0.0023810`.
+- Clearers on `reported_p`: `momentum_L14d_S3d`, `momentum_L1d_S3d`, `momentum_L3d_S3d`.
+- **Robust** (clear under BOTH the HAC p and the bootstrap p): `momentum_L14d_S3d`, `momentum_L3d_S3d`.
+- **Marginal** (HAC p and bootstrap p straddle the threshold; a consistently-applied bootstrap-override-on-disagreement would NOT clear them): `momentum_L1d_S3d`.
+
+**DSR is the multiple-testing-aware metric here:** the deflated Sharpe already deflates each variant's Sharpe by the expected maximum across all 21 trial Sharpes, so it bakes in the widened-family penalty without any extra correction. Per-clearer DSR:
+
+| variant | reported p | HAC p | boot p | DSR | robustness |
+|---|---|---|---|---|---|
+| `momentum_L14d_S3d` | 0.0000393 | 0.00004 | 0.0006 | 0.805 | **robust** |
+| `momentum_L1d_S3d` | 0.0021780 | 0.00218 | 0.0054 | 0.870 | **marginal** |
+| `momentum_L3d_S3d` | 0.0000003 | 0.00000 | 0.0002 | 0.985 | **robust** |
+
+> **Marginal caveat.** `momentum_L1d_S3d` clears on the HAC p only. For L1d/S3d the HAC p (0.00218) clears the widened threshold (`0.0023810`) but the bootstrap p (0.0054) does not — they straddle it. The project rule overrides HAC with the bootstrap on disagreement; applied consistently at the widened threshold, the bootstrap (non-clearing) verdict governs, so this variant does **not** clear under both tests. The robust survivors (clear under HAC AND bootstrap) are the genuine post-hoc candidates.
 
 ## Notes
 

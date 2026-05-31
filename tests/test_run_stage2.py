@@ -182,3 +182,90 @@ def test_build_significance_table_marks_selection_membership():
     assert int(table["in_selection_family"].sum()) == 7
     sel = set(table.loc[table["in_selection_family"], "variant"])
     assert sel == {_variant(lb, PRIMARY_SKIP_DAYS) for lb in LOOKBACKS_DAYS}
+
+
+# ---------------------------------------------------------------------------
+# apply_widened_bonferroni: POST-HOC widened family (skip-as-axis, m == 21)
+# ---------------------------------------------------------------------------
+
+def _verified_widened_inputs() -> dict:
+    """The five candidate stats verified from data/stats/significance.parquet.
+
+    Only the rows that matter for the widened Bonferroni verdict are pinned with
+    their real (reported_p, hac_p, bootstrap_p); every other variant is given a
+    clearly non-clearing p so the m == 21 family is complete but the survivor set
+    is driven by the verified candidates.
+    """
+    reported_p: dict[str, float] = {}
+    hac_p: dict[str, float] = {}
+    boot_p: dict[str, float] = {}
+    for skip in (1, 2, 3):
+        for lb in LOOKBACKS_DAYS:
+            v = _variant(lb, skip)
+            reported_p[v] = 0.20
+            hac_p[v] = 0.20
+            boot_p[v] = 0.20
+    # Verified candidate stats (TASK V0 data facts).
+    reported_p[_variant(3, 3)], hac_p[_variant(3, 3)], boot_p[_variant(3, 3)] = 2.66e-7, 2.66e-7, 0.0002
+    reported_p[_variant(14, 3)], hac_p[_variant(14, 3)], boot_p[_variant(14, 3)] = 3.93e-5, 3.93e-5, 0.0006
+    reported_p[_variant(1, 3)], hac_p[_variant(1, 3)], boot_p[_variant(1, 3)] = 0.00218, 0.00218, 0.0054
+    reported_p[_variant(5, 3)], hac_p[_variant(5, 3)], boot_p[_variant(5, 3)] = 0.00391, 0.00391, 0.0030
+    reported_p[_variant(5, 2)], hac_p[_variant(5, 2)], boot_p[_variant(5, 2)] = 0.0108, 0.00483, 0.0108
+    return {"reported_p": reported_p, "hac_p": hac_p, "boot_p": boot_p}
+
+
+def test_widened_bonferroni_m_is_21_and_threshold():
+    inp = _verified_widened_inputs()
+    out = run_stage2.apply_widened_bonferroni(
+        inp["reported_p"], hac_p=inp["hac_p"], boot_p=inp["boot_p"]
+    )
+    assert out["m"] == 21  # 7 lookbacks x 3 skips, skip promoted to a selection axis
+    assert np.isclose(out["threshold"], 0.05 / 21, atol=1e-9)
+    assert np.isclose(out["threshold"], 0.0023810, atol=1e-6)
+
+
+def test_widened_bonferroni_survivors_on_reported_p():
+    inp = _verified_widened_inputs()
+    out = run_stage2.apply_widened_bonferroni(
+        inp["reported_p"], hac_p=inp["hac_p"], boot_p=inp["boot_p"]
+    )
+    # Clearers on reported_p at threshold 0.05/21 = 0.0023810.
+    assert set(out["survivors"]) == {
+        _variant(3, 3),
+        _variant(14, 3),
+        _variant(1, 3),
+    }
+    # The two next-best candidates do NOT clear (0.00391 and 0.0108 > 0.00238).
+    assert _variant(5, 3) not in out["survivors"]
+    assert _variant(5, 2) not in out["survivors"]
+
+
+def test_widened_bonferroni_l1d_s3d_is_marginal_under_consistent_override():
+    """HONESTY NUANCE: L1d/S3d clears on HAC p only.
+
+    Its HAC p (0.00218) clears the widened 0.00238 threshold but its bootstrap p
+    (0.0054) does NOT. They STRADDLE the threshold -> a consistently-applied
+    bootstrap-override-on-disagreement would reject the bootstrap verdict, so
+    L1d/S3d does NOT clear under both tests. It must be labelled MARGINAL, while
+    L3d/S3d and L14d/S3d (clear under BOTH HAC and bootstrap) are robust.
+    """
+    inp = _verified_widened_inputs()
+    out = run_stage2.apply_widened_bonferroni(
+        inp["reported_p"], hac_p=inp["hac_p"], boot_p=inp["boot_p"]
+    )
+    robustness = out["robustness"]
+
+    # L1d/S3d: HAC clears, bootstrap does not -> straddles -> MARGINAL.
+    assert robustness[_variant(1, 3)] == "marginal"
+    # L3d/S3d and L14d/S3d: clear under BOTH HAC and bootstrap -> robust.
+    assert robustness[_variant(3, 3)] == "robust"
+    assert robustness[_variant(14, 3)] == "robust"
+
+    # The robust survivors clear under both tests; the marginal one does not.
+    assert set(out["robust_survivors"]) == {_variant(3, 3), _variant(14, 3)}
+    assert out["marginal_survivors"] == [_variant(1, 3)]
+
+    # Explicit straddle determination for L1d/S3d at the widened threshold.
+    thr = out["threshold"]
+    assert inp["hac_p"][_variant(1, 3)] <= thr  # HAC clears
+    assert inp["boot_p"][_variant(1, 3)] > thr  # bootstrap does NOT clear

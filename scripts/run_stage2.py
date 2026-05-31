@@ -137,6 +137,79 @@ def apply_bonferroni(
     }
 
 
+def apply_widened_bonferroni(
+    reported_p_by_variant: dict[str, float],
+    *,
+    hac_p: dict[str, float],
+    boot_p: dict[str, float],
+    alpha: float = ALPHA,
+) -> dict:
+    """POST-HOC widened-family Bonferroni: skip promoted to a SELECTION AXIS (m = 21).
+
+    This is the **exploratory / post-hoc** reframe (Task V0): instead of the
+    pre-registered ``m = 7`` (7 lookbacks at the fixed ``skip = 1`` convention),
+    skip is treated as a third selection dimension, so the family is the full
+    7 lookbacks x 3 skips = 21 variants and the Bonferroni per-test threshold is
+    ``alpha / 21 = 0.0023810``. It does NOT relax or overturn the pre-registered
+    skip=1 null; it only charges the larger multiple-testing penalty to the
+    skip>=2 variants the user has asked be tested honestly.
+
+    Survivors are computed on each variant's ``reported_p`` (the bootstrap on a
+    HAC/bootstrap disagreement, else the HAC p — spec §2.7). Each survivor is then
+    classified for ROBUSTNESS under a *consistently-applied* override at the
+    widened threshold:
+
+      * ``robust``   -- clears under BOTH the HAC p AND the bootstrap p;
+      * ``marginal`` -- the HAC p and bootstrap p STRADDLE the threshold (one
+        clears, the other does not). A consistently-applied
+        bootstrap-override-on-disagreement would then take the bootstrap (non-
+        clearing) verdict, so the survivor is flagged marginal and must not be
+        read as cleared under both tests.
+
+    Args:
+        reported_p_by_variant: reported p per variant (the survivor selector).
+        hac_p: HAC p per variant (for the robustness straddle check).
+        boot_p: bootstrap p per variant (for the robustness straddle check).
+        alpha: family-wise level (default 0.05).
+
+    Returns:
+        Dict: ``m`` (== number of finite reported p, expected 21), ``threshold``
+        (alpha/m == 0.0023810), ``survivors`` (clear on reported_p), per-survivor
+        ``robustness`` ({variant: "robust"|"marginal"}), and the split
+        ``robust_survivors`` / ``marginal_survivors`` lists.
+    """
+    family = sorted(reported_p_by_variant)
+    pvals = [reported_p_by_variant[v] for v in family]
+    corr = bonferroni_correction(pvals, alpha=alpha)
+    threshold = corr["threshold"]
+    survivors = [v for v, keep in zip(family, corr["reject"]) if keep]
+
+    robustness: dict[str, str] = {}
+    robust_survivors: list[str] = []
+    marginal_survivors: list[str] = []
+    for v in survivors:
+        hac_clears = np.isfinite(hac_p[v]) and hac_p[v] <= threshold
+        boot_clears = np.isfinite(boot_p[v]) and boot_p[v] <= threshold
+        if hac_clears and boot_clears:
+            robustness[v] = "robust"
+            robust_survivors.append(v)
+        else:
+            # HAC and bootstrap straddle the widened threshold -> a consistently
+            # applied bootstrap-override would NOT clear this survivor.
+            robustness[v] = "marginal"
+            marginal_survivors.append(v)
+
+    return {
+        "m": corr["m"],
+        "threshold": threshold,
+        "survivors": survivors,
+        "reject": corr["reject"],
+        "robustness": robustness,
+        "robust_survivors": robust_survivors,
+        "marginal_survivors": marginal_survivors,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Per-variant battery (one row)
 # ---------------------------------------------------------------------------
@@ -386,6 +459,36 @@ def _fmt(x: float, nd: int = 4) -> str:
     return f"{x:.{nd}f}"
 
 
+def _format_survivors(survivors: list[str], table: pd.DataFrame, bonf: dict) -> str:
+    """Render the Bonferroni survivors with the honest §2.6 disqualification note.
+
+    A survivor that fails the sign-stability deployment gate (``holds_sign`` is
+    False) is flagged **DISQUALIFIED**; if it cleared only because the bootstrap
+    overrode a HAC p that exceeds the Bonferroni threshold (a disagreement), that
+    is stated too. This reproduces the hand-authored honest annotation so a
+    regeneration never silently drops it.
+    """
+    if not survivors:
+        return "**none**"
+    by_variant = table.set_index("variant")
+    threshold = bonf["threshold"]
+    parts: list[str] = []
+    for s in survivors:
+        label = f"`{s}`"
+        if s in by_variant.index:
+            row = by_variant.loc[s]
+            if not bool(row["holds_sign"]):
+                note = "DISQUALIFIED — fails §2.6 sign-stability"
+                if bool(row["disagreement"]) and float(row["hac_p"]) > threshold:
+                    note += (
+                        f"; survives only via the bootstrap-override rule, "
+                        f"HAC p={_fmt(float(row['hac_p']), 4)} > {_fmt(threshold, 5)}"
+                    )
+                label += f" **({note})**"
+        parts.append(label)
+    return ", ".join(parts)
+
+
 def write_markdown(
     table: pd.DataFrame,
     bonf: dict,
@@ -393,8 +496,14 @@ def write_markdown(
     overfit: dict,
     verdict: str,
     path: Path = OUTPUT_MD,
+    widened: dict | None = None,
 ) -> None:
-    """Write the human-readable Stage-2 results table (failures included)."""
+    """Write the human-readable Stage-2 results table (failures included).
+
+    When ``widened`` (the :func:`apply_widened_bonferroni` result) is provided, a
+    clearly-labelled POST-HOC widened-family section is appended BELOW the
+    pre-registered skip=1 sections (it never replaces them).
+    """
     lines: list[str] = []
     lines.append("# Stage 2 — Statistical Significance Battery Results")
     lines.append("")
@@ -413,11 +522,7 @@ def write_markdown(
     )
     lines.append(f"- **Total tests run (selection + diagnostics): {total_tests}.**")
     survivors = bonf["survivors"]
-    lines.append(
-        "- Bonferroni survivors: "
-        + (", ".join(f"`{s}`" for s in survivors) if survivors else "**none**")
-        + "."
-    )
+    lines.append("- Bonferroni survivors: " + _format_survivors(survivors, table, bonf) + ".")
     lines.append(
         f"- Grid PBO/CSCV (probability of backtest overfitting): "
         f"{_fmt(overfit['pbo'], 3)} "
@@ -442,6 +547,11 @@ def write_markdown(
     _emit_table(lines, table[~table["in_selection_family"]], overfit)
     lines.append("")
 
+    # POST-HOC widened section — strictly BELOW the pre-registered skip=1
+    # sections above; never replaces them (Task V0).
+    if widened is not None:
+        _emit_widened_section(lines, table, widened)
+
     lines.append("## Notes")
     lines.append("")
     lines.append(
@@ -464,6 +574,95 @@ def write_markdown(
     lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
+
+
+def _emit_widened_section(lines: list[str], table: pd.DataFrame, widened: dict) -> None:
+    """Append the POST-HOC widened-family (skip-as-axis, m=21) section.
+
+    Strictly informational and exploratory: it charges the full m=21 Bonferroni
+    to the skip>=2 variants the user asked be tested, but does NOT relax or
+    overturn the pre-registered skip=1 null reported above.
+    """
+    thr = widened["threshold"]
+    survivors = widened["survivors"]
+    robust = widened["robust_survivors"]
+    marginal = widened["marginal_survivors"]
+    robustness = widened["robustness"]
+    dsr = dict(zip(table["variant"], table.get("dsr", pd.Series(dtype=float))))
+
+    lines.append(
+        "## Widened family (skip as a selection axis, m=21) — POST-HOC / exploratory"
+    )
+    lines.append("")
+    lines.append(
+        "**This section is post-hoc and exploratory.** In the pre-registered design "
+        "`skip` was a fixed nuisance convention (`skip = 1`), so the selection family "
+        "was the 7 lookbacks at skip=1 (`m = 7`) and the skip ∈ {2,3} variants were "
+        "reported only as diagnostics. Here `skip` is promoted to a third selection "
+        "axis, giving the full **7 lookbacks × 3 skips = 21** family and the larger "
+        "Bonferroni penalty `0.05 / 21 = "
+        f"{_fmt(thr, 7)}`. This is reported for completeness at the user's direction; "
+        "it does **NOT** retroactively make the pre-registered skip=1 null a false "
+        "negative — the skip=1 verdict above stands. Any positive here is a "
+        "post-hoc / selection-biased finding and must be confirmed on forward data."
+    )
+    lines.append("")
+    lines.append(
+        f"- Widened family size: **m = {widened['m']}**; Bonferroni threshold "
+        f"= 0.05 / {widened['m']} = `{_fmt(thr, 7)}`."
+    )
+    lines.append(
+        "- Clearers on `reported_p`: "
+        + (", ".join(f"`{s}`" for s in sorted(survivors)) if survivors else "**none**")
+        + "."
+    )
+    lines.append(
+        "- **Robust** (clear under BOTH the HAC p and the bootstrap p): "
+        + (", ".join(f"`{s}`" for s in sorted(robust)) if robust else "**none**")
+        + "."
+    )
+    lines.append(
+        "- **Marginal** (HAC p and bootstrap p straddle the threshold; a "
+        "consistently-applied bootstrap-override-on-disagreement would NOT clear "
+        "them): "
+        + (", ".join(f"`{s}`" for s in sorted(marginal)) if marginal else "**none**")
+        + "."
+    )
+    lines.append("")
+    lines.append(
+        "**DSR is the multiple-testing-aware metric here:** the deflated Sharpe "
+        "already deflates each variant's Sharpe by the expected maximum across all "
+        "21 trial Sharpes, so it bakes in the widened-family penalty without any "
+        "extra correction. Per-clearer DSR:"
+    )
+    lines.append("")
+    lines.append("| variant | reported p | HAC p | boot p | DSR | robustness |")
+    lines.append("|" + "|".join(["---"] * 6) + "|")
+    rep = dict(zip(table["variant"], table["reported_p"]))
+    hacp = dict(zip(table["variant"], table["hac_p"]))
+    bootp = dict(zip(table["variant"], table["bootstrap_p"]))
+    for v in sorted(survivors):
+        lines.append(
+            f"| `{v}` | {_fmt(rep.get(v, float('nan')), 7)} | "
+            f"{_fmt(hacp.get(v, float('nan')), 5)} | "
+            f"{_fmt(bootp.get(v, float('nan')), 4)} | "
+            f"{_fmt(dsr.get(v, float('nan')), 3)} | "
+            f"**{robustness.get(v, 'n/a')}** |"
+        )
+    lines.append("")
+    if marginal:
+        marg_list = ", ".join(f"`{s}`" for s in sorted(marginal))
+        lines.append(
+            f"> **Marginal caveat.** {marg_list} clears on the HAC p only. For "
+            "L1d/S3d the HAC p (0.00218) clears the widened threshold "
+            f"(`{_fmt(thr, 7)}`) but the bootstrap p (0.0054) does not — they "
+            "straddle it. The project rule overrides HAC with the bootstrap on "
+            "disagreement; applied consistently at the widened threshold, the "
+            "bootstrap (non-clearing) verdict governs, so this variant does **not** "
+            "clear under both tests. The robust survivors (clear under HAC AND "
+            "bootstrap) are the genuine post-hoc candidates."
+        )
+        lines.append("")
 
 
 def _emit_table(lines: list[str], sub: pd.DataFrame, overfit: dict) -> None:
@@ -575,9 +774,15 @@ def main() -> int:
 
     verdict = overall_verdict(table)
 
+    # POST-HOC widened family: skip promoted to a selection axis (m = 21). This
+    # is additive (the pre-registered m=7 bonf above is untouched) and exploratory.
+    hac_p = dict(zip(table["variant"], table["hac_p"]))
+    boot_p = dict(zip(table["variant"], table["bootstrap_p"]))
+    widened = apply_widened_bonferroni(reported_p, hac_p=hac_p, boot_p=boot_p)
+
     OUTPUT_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     table.to_parquet(OUTPUT_PARQUET, index=False)
-    write_markdown(table, bonf, total_tests, overfit, verdict)
+    write_markdown(table, bonf, total_tests, overfit, verdict, widened=widened)
 
     # --- Console summary (selection family). ---
     fam = table[table["in_selection_family"]].sort_values("variant")
@@ -594,6 +799,11 @@ def main() -> int:
     print(f"  survivors                   : {bonf['survivors'] or 'none'}")
     print(f"  grid PBO/CSCV               : {_fmt(overfit['pbo'], 3)}")
     print(f"  HONEST VERDICT              : {verdict}")
+    print()
+    print(f"  [POST-HOC] widened m        : {widened['m']}  (threshold {widened['threshold']:.7f})")
+    print(f"  [POST-HOC] clearers         : {sorted(widened['survivors']) or 'none'}")
+    print(f"  [POST-HOC] robust (both)    : {sorted(widened['robust_survivors']) or 'none'}")
+    print(f"  [POST-HOC] marginal (HAC)   : {sorted(widened['marginal_survivors']) or 'none'}")
     print()
     print(f"  wrote {OUTPUT_PARQUET}")
     print(f"  wrote {OUTPUT_MD}")
