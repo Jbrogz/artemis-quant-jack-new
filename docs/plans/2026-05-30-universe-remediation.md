@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12 (uv-pinned), pandas, requests, pyarrow, pytest. Same repo: `/Users/jackbrogan/Desktop/artemis-quant-joint/new-artemis-work`.
 
-**References (read first):** `docs/reference/factor-book-guide.md` §1.1–1.2; `docs/specs/2026-05-30-artemis-momentum-design.md` §3.5, §3.6, §4 Stage 1.1, §7, §10, Appendix B.
+**References (read first):** `docs/specs/2026-05-30-artemis-momentum-design.md` §3.5, §3.6, §4 Stage 1.1, §7, §10, Appendix B.
 
 **Hard rules:** TDD (real tests first, watch fail, minimal impl, watch pass, commit). Never open/print `.env` — scripts load the key via `load_dotenv()`+`os.environ`, print only `len`. One-line commits, no Co-Authored-By trailer. No stubs/placeholders left behind.
 

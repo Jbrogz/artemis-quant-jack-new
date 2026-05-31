@@ -1,9 +1,8 @@
 # Artemis Momentum Factor Book — Design Spec
 
 _Date: 2026-05-30. Status: rev 3 — universe corrected after live-Artemis verification (Appendix B)._
-_Authoritative methodology: `docs/reference/factor-book-guide.md` (verbatim extraction of_
-_`Project1_Factor_Book_Guide.docx`). This rev incorporates an adversarial vetting pass against_
-_that guide — see Appendix A for the findings and their resolutions._
+_Authoritative methodology: the Project 1 Factor Book Guide. This rev incorporates an adversarial_
+_vetting pass against that methodology — see Appendix A for the findings and their resolutions._
 
 ---
 
@@ -299,8 +298,7 @@ modules (≤400 lines typical), immutable transforms.
 new-artemis-work/
   pyproject.toml, uv.lock, .env.example, Makefile, README.md, .gitignore
   docs/
-    reference/factor-book-guide.md                 # authoritative guide (verbatim)
-    specs/2026-05-30-artemis-momentum-design.md     # this spec
+    specs/2026-05-30-artemis-momentum-design.md     # this spec (authoritative methodology)
     plans/                                          # implementation plan (next step)
   src/amom/
     config.py            # universe params, lookback grid, skip, OOS rule, cost params, caps,
@@ -407,7 +405,7 @@ never opens `.env`).
 
 ## Appendix A — Vetting record (rev 1 → rev 2)
 
-Rev 1 was reviewed by an adversarial methodology agent against `factor-book-guide.md`.
+Rev 1 was reviewed by an adversarial methodology agent against the Project 1 Factor Book Guide methodology.
 Verdict: **FAITHFUL_WITH_FIXES**. The anti-bias core (survivorship, point-in-time, look-ahead-
 in-code, OOS-up-front, bootstrap-overrides-NW, reporting honesty) was confirmed faithful with
 real tests. Resolutions folded into rev 2:

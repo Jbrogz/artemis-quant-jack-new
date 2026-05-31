@@ -9,7 +9,7 @@
 **Tech Stack:** Python 3.11+, uv, pandas, requests, pyarrow (parquet), pytest, python-dotenv, ruff.
 
 **Authoritative references (agents MUST read before coding):**
-- Methodology guide: `docs/reference/factor-book-guide.md` (§1.1 universe, §1.2 returns are most relevant).
+- Methodology (universe & returns): `docs/specs/2026-05-30-artemis-momentum-design.md` §4 Stage 1.
 - Design spec: `docs/specs/2026-05-30-artemis-momentum-design.md` (§3, §4 Stage 1, §6 reuse manifest, §7 anti-bias matrix).
 - Reuse sources (copy FROM here, in the parent repo): `../src/cmom/providers/{artemis,base}.py`, `../src/cmom/cache.py`, `../src/cmom/config.py`.
 

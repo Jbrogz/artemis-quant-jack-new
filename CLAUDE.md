@@ -2,7 +2,7 @@
 
 **New window? READ `docs/STATUS.md` FIRST** — it has full project state, the verified findings, and the open work item.
 
-Single-factor (**momentum only**) crypto long/short factor book, **all data from Artemis**, following `docs/reference/factor-book-guide.md` strictly. Package `amom`. Repo: `github.com/Jbrogz/artemis-quant-jack-new` (private).
+Single-factor (**momentum only**) crypto long/short factor book, **all data from Artemis**, following the Project 1 Factor Book Guide methodology strictly. Package `amom`. Repo: `github.com/Jbrogz/artemis-quant-jack-new` (private).
 
 ## Status (2026-05-31)
 Complete through Stage 5, every stage adversarially verified SOUND, 226 tests passing. Deliverables: `docs/report/Artemis_Momentum_Report.pdf` + `Artemis_Momentum_Findings.docx`. **Verified finding: momentum is a rigorous statistical NULL in the pre-registered family → NO-DEPLOY.**

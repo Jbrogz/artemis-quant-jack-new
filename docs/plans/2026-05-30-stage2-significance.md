@@ -4,7 +4,7 @@
 
 **Goal:** Run the full guide §2 significance battery on the momentum variants — Newey-West HAC (at the correct bandwidth), Lo (2002) Sharpe SE, spanning regression vs {market, size control}, stationary block bootstrap, Bonferroni + Harvey-Liu-Zhu multiple-testing, subsample stability, DSR/PBO overfitting — on the **in-sample** slice only, with the **OOS window reserved and sealed**. Report whatever it shows; an honest null is a valid result.
 
-**References (read first):** `docs/specs/2026-05-30-artemis-momentum-design.md` §2.0–§2.8, §3.2 (single-factor spanning), §7; `docs/reference/factor-book-guide.md` §2.1–§2.8 + Appendix. PORT from parent repo: `../Project 1/factor-book-jack/factor-eval/src/factor_eval/stats.py` (hac_tstat, ols_tstat_hac, newey_west_se, bonferroni_correction, classify_tstat_hlz, sharpe/drawdown/calmar) and `../src/cmom/overfitting/{dsr.py,pbo.py}` (bootstrap.py = cross-check only; arch is the bootstrap of record).
+**References (read first):** `docs/specs/2026-05-30-artemis-momentum-design.md` §2.0–§2.8, §3.2 (single-factor spanning), §7. PORT from parent repo: `../Project 1/factor-book-jack/factor-eval/src/factor_eval/stats.py` (hac_tstat, ols_tstat_hac, newey_west_se, bonferroni_correction, classify_tstat_hlz, sharpe/drawdown/calmar) and `../src/cmom/overfitting/{dsr.py,pbo.py}` (bootstrap.py = cross-check only; arch is the bootstrap of record).
 
 **Hard rules:** TDD. Never open/print `.env`. One-line commits, no Co-Authored-By. Do NOT push. **OOS DISCIPLINE: no code in this stage may read factor-return rows dated ≥ `OOS_START`; selection uses in-sample only.** No stubs.
 
