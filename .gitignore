@@ -16,6 +16,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.worktrees/
 
 # Data artifacts (regenerated from Artemis; never committed)
 data/
