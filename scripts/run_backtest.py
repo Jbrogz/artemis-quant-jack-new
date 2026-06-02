@@ -185,6 +185,44 @@ def read_oos_panels_once(
     )
 
 
+def build_oos_weight_inputs_once(
+    price_panel: pd.DataFrame,
+    eligibility_input: pd.DataFrame,
+    returns: pd.DataFrame,
+    universe: pd.DataFrame,
+    specs: dict[str, dict],
+    guard: OneShotOOS,
+    *,
+    widened_specs: list[dict] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build OOS weight books and slice OOS panels inside one guarded path.
+
+    The guard opens before any OOS-dated variant weight is formed. Each book is
+    built only for rebalance dates ``>= OOS_START`` and tagged so callers can
+    split the single combined OOS read back per spec.
+    """
+    guard.open()
+    frames: list[pd.DataFrame] = []
+    for key, spec in specs.items():
+        book = build_weight_book(price_panel, eligibility_input, spec, start=OOS_START)
+        book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+        frames.append(book.assign(_spec=key))
+
+    for spec in widened_specs or []:
+        variant = spec["variant"]
+        book = build_weight_book(price_panel, eligibility_input, spec, start=OOS_START)
+        book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
+        frames.append(book.assign(_spec=f"widened::{variant}"))
+
+    if frames:
+        combined = pd.concat(frames, ignore_index=True)
+        combined = _oos_slice(combined, "rebalance_date")
+    else:
+        combined = pd.DataFrame(columns=["rebalance_date", "symbol", "weight", "_spec"])
+
+    return combined, _oos_slice(returns, "date"), _oos_slice(universe, "date")
+
+
 # ===========================================================================
 # Panel reconstruction (offline; reused from the Stage-1/Stage-2 conventions)
 # ===========================================================================
@@ -259,6 +297,8 @@ def build_weight_book(
     spec: dict,
     *,
     holding_days: int = HOLDING_DAYS,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
     """Per-rebalance dollar-neutral coin-weight book for one spec (the engine's input).
 
@@ -273,6 +313,8 @@ def build_weight_book(
             ``[date, symbol, eligible]`` frame (auto-pivoted).
         spec: ``{"lookback", "skip", "quantile", ...}``.
         holding_days: rebalance cadence (default ``HOLDING_DAYS``).
+        start: optional inclusive lower bound for rebalance dates.
+        end: optional exclusive upper bound for rebalance dates.
     """
     if {"date", "symbol"}.issubset(eligibility_input.columns):
         eligibility = (
@@ -287,6 +329,12 @@ def build_weight_book(
 
     signal = build_momentum_signal(price_panel, spec["lookback"], spec["skip"])
     rebal_dates = build_rebalance_dates(signal.index, holding_days=holding_days)
+    if start is not None:
+        start = pd.Timestamp(start).normalize()
+        rebal_dates = [r for r in rebal_dates if r >= start]
+    if end is not None:
+        end = pd.Timestamp(end).normalize()
+        rebal_dates = [r for r in rebal_dates if r < end]
 
     frames = []
     for r in rebal_dates:
@@ -1047,17 +1095,16 @@ def characterize_candidate_in_sample(
     vs net Sharpe + annualized turnover + the 2x-cost rerun), and
     ``_candidate_for_capacity`` + ``metrics.capacity`` (capacity on the actual
     per-rebalance *traded* order, not the standing held book). NO OOS rows are
-    read: the book is sliced to ``< OOS_START`` via ``in_sample_slice`` and only
-    the pre-sliced in-sample holding/universe panels are passed in.
+    read: the book is formed only for dates ``< OOS_START`` and only the
+    pre-sliced in-sample holding/universe panels are passed in.
 
     Returns a record carrying the gross/net IS metrics, the 2x-cost rerun, the
     per-rebalance gross edge and the finite capacity AUM, plus the spec.
     """
-    book = build_weight_book(price_panel, eligibility_input, spec)
+    book = build_weight_book(price_panel, eligibility_input, spec, end=OOS_START)
     book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
-    book_is = in_sample_slice(book)
 
-    res = characterize_in_sample(book_is, holding_is, universe_is, aum=aum)
+    res = characterize_in_sample(book, holding_is, universe_is, aum=aum)
 
     gross_eq = res["_gross_eq"]
     gross_edge = (
@@ -1112,30 +1159,20 @@ def main() -> int:
     holding_is = returns_long[returns_long["date"] < OOS_START]
     universe_is = universe_long[universe_long["date"] < OOS_START]
 
-    # --- Build every spec's full weight book ONCE (a pure formation; the book
-    #     itself carries OOS-dated rows but no metric reads them until the single
-    #     guarded OOS step below). ----------------------------------------------
-    books: dict[str, pd.DataFrame] = {}
+    # --- Build in-sample books only. OOS-dated weights are not formed until the
+    #     single guarded OOS step below opens the sealed window. -----------------
+    books_is: dict[str, pd.DataFrame] = {}
     for key, spec in specs.items():
-        book = build_weight_book(price_panel, eligibility, spec)
+        book = build_weight_book(price_panel, eligibility, spec, end=OOS_START)
         book["rebalance_date"] = pd.to_datetime(book["rebalance_date"]).dt.normalize()
-        books[key] = book
-
-    # --- Widened skip>=2 candidate full weight books (Task V2): built here as a
-    #     pure formation alongside the pre-registered books so their OOS slices
-    #     ride the SAME single guarded read below. No metric reads them yet. -----
-    widened_books: dict[str, pd.DataFrame] = {}
-    for spec in WIDENED_CANDIDATES:
-        wbook = build_weight_book(price_panel, eligibility, spec)
-        wbook["rebalance_date"] = pd.to_datetime(wbook["rebalance_date"]).dt.normalize()
-        widened_books[spec["variant"]] = wbook
+        books_is[key] = book
 
     # =======================================================================
     # IN-SAMPLE characterization (rows < OOS_START only; OOS untouched)
     # =======================================================================
     is_results: dict[str, dict] = {}
     for key, spec in specs.items():
-        book_is = in_sample_slice(books[key])
+        book_is = books_is[key]
         in_sample_res = characterize_in_sample(book_is, holding_is, universe_is)
 
         lb_robust: list[dict] = []
@@ -1145,9 +1182,9 @@ def main() -> int:
         if key == "primary":
             # +/-50% lookback rerun (reuses the chosen spec; only lookback moves).
             for rspec in lookback_robustness_specs(spec):
-                rbook = build_weight_book(price_panel, eligibility, rspec)
+                rbook = build_weight_book(price_panel, eligibility, rspec, end=OOS_START)
                 rbook["rebalance_date"] = pd.to_datetime(rbook["rebalance_date"]).dt.normalize()
-                rrun = run_full(in_sample_slice(rbook), holding_is, universe_is)
+                rrun = run_full(rbook, holding_is, universe_is)
                 lb_robust.append({
                     "variant": rspec["variant"], "tag": rspec["tag"],
                     "net": metrics_for(rrun["equity"], rrun["trades"]),
@@ -1177,27 +1214,20 @@ def main() -> int:
     # =======================================================================
     # OUT-OF-SAMPLE: spend the sealed window EXACTLY ONCE (one guarded read)
     # =======================================================================
-    # All specs' books are concatenated and the OOS slices of ALL THREE engine
-    # inputs (book + daily returns + universe) are read in a SINGLE guarded call —
-    # the only code path in the whole runner that touches a row dated >= OOS_START
-    # (spec §2.8 / §4.6). The engine then sees OOS-only panels, so OOS-once is
-    # ENFORCED across every input, not merely conventional. The combined OOS book
-    # is split back per spec; no further OOS read occurs.
-    # The combined book carries the pre-registered specs AND every widened
-    # candidate (namespaced `widened::<variant>` tags). Folding the widened books
-    # into this ONE concat means adding the candidates does NOT add a second OOS
-    # read path — the single guard.open() below stays at open_count == 1 (Task V2).
+    # OOS-dated weight books are formed only after the guard opens, then combined
+    # with the OOS slices of the daily returns and universe in this single code
+    # path. The combined OOS book carries the pre-registered specs AND every
+    # widened candidate (namespaced `widened::<variant>` tags), then gets split
+    # back per spec; no further OOS read or OOS weight formation occurs.
     oos_guard = OneShotOOS()
-    combined_books = pd.concat(
-        [books[k].assign(_spec=k) for k in specs]
-        + [
-            widened_books[v].assign(_spec=f"widened::{v}")
-            for v in widened_books
-        ],
-        ignore_index=True,
-    )
-    oos_combined, oos_returns, oos_universe = read_oos_panels_once(
-        combined_books, returns_long, universe_long, oos_guard
+    oos_combined, oos_returns, oos_universe = build_oos_weight_inputs_once(
+        price_panel,
+        eligibility,
+        returns_long,
+        universe_long,
+        specs,
+        oos_guard,
+        widened_specs=WIDENED_CANDIDATES,
     )
 
     report: dict = {}
@@ -1268,9 +1298,8 @@ def main() -> int:
     # =======================================================================
     # POST-HOC widened skip>=2 candidates: IN-SAMPLE characterization (Task V1).
     # Reuses the in-sample panels above (date < OOS_START) and the same helpers
-    # as the pre-registered specs — NO OOS row is read here (the OOS window for
-    # these candidates is unspent and stays sealed for Task V2). The OOS-net
-    # column in the markdown is a V2 placeholder.
+    # as the pre-registered specs. No OOS row is read here; widened OOS books and
+    # panels have already been acquired through the single guarded path above.
     # =======================================================================
     widened_records: dict = {}
     for spec in WIDENED_CANDIDATES:

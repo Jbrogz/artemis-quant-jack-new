@@ -1,6 +1,5 @@
 """Tests for the parquet cache (round-trip, is_cached, unknown key)."""
 import pandas as pd
-import pytest
 
 from amom.cache import cache_key, is_cached, read_frame, write_frame
 

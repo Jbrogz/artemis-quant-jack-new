@@ -7,8 +7,10 @@ Factor Book study as a Microsoft Word .docx:
     docs/report/Artemis_Momentum_Findings.docx
 
 This is an ASSEMBLY / PRESENTATION task. The analysis is complete and verified.
-EVERY number in this document is quoted VERBATIM from the committed
-source-of-truth artifacts; nothing is re-derived or invented:
+The document embeds verified literal narrative and table values from the
+committed source artifacts; it does not recompute statistics. The highest-risk
+Stage-2 and Stage-4 literal tables are covered by tests that compare them back
+to their source markdown docs:
 
   - docs/report/Artemis_Momentum_Report.md            (narrative, primary source)
   - docs/STAGE2_RESULTS.md                             (full 21-variant table)
@@ -31,7 +33,6 @@ import pathlib
 import sys
 
 from docx import Document
-from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt, RGBColor
@@ -74,31 +75,31 @@ STAGE2_COLUMNS = [
 
 # Selection family (skip = 1) — the deployment candidates (7 rows).
 STAGE2_FAMILY = [
-    ["momentum_L14d_S1d", "69", "1.902", "1.945", "not_significant", "0.5128", "0.799 (0.425)", "no", "0.02310", "1.597", "0.0259", "0.0354", "no", "yes", "powered", "0.308", "no"],
-    ["momentum_L1d_S1d", "69", "-1.247", "-1.300", "not_significant", "-0.3078", "-0.524 (0.422)", "no", "-0.02502", "-1.457", "0.9032", "0.9102", "no", "no", "powered", "0.000", "no"],
-    ["momentum_L28d_S1d", "69", "0.911", "0.955", "not_significant", "0.2791", "0.383 (0.421)", "no", "-0.00197", "-0.104", "0.1698", "0.1780", "no", "yes", "powered", "0.060", "no"],
-    ["momentum_L3d_S1d", "69", "1.606", "1.533", "not_significant", "0.4098", "0.674 (0.424)", "no", "0.01265", "0.811", "0.0626", "0.0656", "no", "no", "powered", "0.198", "no"],
-    ["momentum_L56d_S1d", "69", "0.935", "0.756", "not_significant", "0.2683", "0.393 (0.525)", "yes", "0.00777", "0.351", "0.2249", "0.2024", "no", "no", "powered", "0.062", "no"],
-    ["momentum_L5d_S1d", "69", "2.315", "2.403", "suggestive", "0.6163", "0.972 (0.428)", "no", "0.04631", "2.206", "0.0081", "0.0058", "yes", "no", "powered", "0.460", "yes"],
-    ["momentum_L7d_S1d", "69", "2.068", "1.887", "not_significant", "0.6209", "0.868 (0.426)", "no", "0.04020", "1.614", "0.0296", "0.0214", "no", "yes", "powered", "0.352", "no"],
+    ["momentum_L14d_S1d", "69", "1.902", "1.945", "not_significant", "0.5128", "0.799 (0.425)", "no", "0.02343", "1.605", "0.0259", "0.0354", "no", "yes", "powered", "0.308", "no"],
+    ["momentum_L1d_S1d", "69", "-1.247", "-1.300", "not_significant", "-0.3078", "-0.524 (0.422)", "no", "-0.02494", "-1.450", "0.9032", "0.9102", "no", "no", "powered", "0.000", "no"],
+    ["momentum_L28d_S1d", "69", "0.911", "0.955", "not_significant", "0.2791", "0.383 (0.421)", "no", "-0.00166", "-0.088", "0.1698", "0.1780", "no", "yes", "powered", "0.060", "no"],
+    ["momentum_L3d_S1d", "69", "1.606", "1.533", "not_significant", "0.4098", "0.674 (0.424)", "no", "0.01286", "0.822", "0.0626", "0.0656", "no", "no", "powered", "0.198", "no"],
+    ["momentum_L56d_S1d", "69", "0.935", "0.756", "not_significant", "0.2683", "0.393 (0.525)", "yes", "0.00798", "0.360", "0.2249", "0.2024", "no", "no", "powered", "0.062", "no"],
+    ["momentum_L5d_S1d", "69", "2.315", "2.403", "suggestive", "0.6163", "0.972 (0.428)", "no", "0.04651", "2.211", "0.0081", "0.0058", "yes", "no", "powered", "0.460", "yes"],
+    ["momentum_L7d_S1d", "69", "2.068", "1.887", "not_significant", "0.6209", "0.868 (0.426)", "no", "0.04047", "1.621", "0.0296", "0.0214", "no", "yes", "powered", "0.352", "no"],
 ]
 
 # Diagnostics (skip {2,3}) — reported, never eligible for deployment (14 rows).
 STAGE2_DIAGNOSTICS = [
-    ["momentum_L14d_S2d", "69", "2.369", "2.298", "suggestive", "0.6492", "0.995 (0.428)", "no", "0.03656", "2.197", "0.0108", "0.0140", "no", "yes", "powered", "0.481", "no"],
-    ["momentum_L14d_S3d", "69", "3.241", "3.949", "significant", "0.8988", "1.361 (0.436)", "no", "0.06042", "3.888", "0.0000", "0.0006", "no", "yes", "powered", "0.805", "no"],
-    ["momentum_L1d_S2d", "69", "0.075", "0.069", "not_significant", "0.0288", "0.032 (0.420)", "no", "-0.03414", "-1.504", "0.4724", "0.4459", "no", "no", "powered", "0.010", "no"],
-    ["momentum_L1d_S3d", "69", "3.338", "2.851", "suggestive", "1.0432", "1.402 (0.437)", "no", "0.07471", "2.654", "0.0022", "0.0054", "no", "yes", "powered", "0.870", "no"],
-    ["momentum_L28d_S2d", "69", "0.872", "0.937", "not_significant", "0.2497", "0.366 (0.421)", "no", "0.00301", "0.167", "0.1744", "0.1758", "no", "yes", "powered", "0.060", "no"],
-    ["momentum_L28d_S3d", "69", "1.416", "1.393", "not_significant", "0.3889", "0.595 (0.423)", "no", "0.01918", "1.061", "0.0818", "0.0804", "no", "yes", "powered", "0.142", "no"],
-    ["momentum_L3d_S2d", "69", "2.766", "2.378", "suggestive", "1.0109", "1.161 (0.505)", "yes", "0.04369", "2.105", "0.0087", "0.0192", "no", "no", "powered", "0.653", "no"],
-    ["momentum_L3d_S3d", "69", "4.663", "5.015", "significant", "1.0807", "1.958 (0.452)", "no", "0.08099", "4.735", "0.0000", "0.0002", "no", "yes", "powered", "0.985", "no"],
-    ["momentum_L56d_S2d", "69", "1.217", "0.990", "not_significant", "0.3780", "0.511 (0.522)", "yes", "0.00903", "0.412", "0.1610", "0.1466", "no", "no", "powered", "0.099", "no"],
-    ["momentum_L56d_S3d", "69", "1.075", "0.891", "not_significant", "0.3159", "0.451 (0.513)", "yes", "0.01069", "0.517", "0.1866", "0.1658", "no", "no", "powered", "0.081", "no"],
-    ["momentum_L5d_S2d", "69", "2.508", "2.588", "suggestive", "0.9616", "1.053 (0.429)", "no", "0.04495", "2.048", "0.0048", "0.0108", "yes", "yes", "powered", "0.558", "no"],
-    ["momentum_L5d_S3d", "69", "2.857", "2.660", "suggestive", "0.8167", "1.200 (0.432)", "no", "0.05033", "2.179", "0.0039", "0.0030", "no", "yes", "powered", "0.675", "no"],
-    ["momentum_L7d_S2d", "69", "2.097", "2.327", "suggestive", "0.6428", "0.881 (0.427)", "no", "0.03496", "1.681", "0.0100", "0.0116", "no", "yes", "powered", "0.372", "no"],
-    ["momentum_L7d_S3d", "69", "1.925", "2.102", "suggestive", "0.5245", "0.808 (0.426)", "no", "0.03522", "2.075", "0.0178", "0.0110", "no", "yes", "powered", "0.330", "no"],
+    ["momentum_L14d_S2d", "69", "2.369", "2.298", "suggestive", "0.6492", "0.995 (0.428)", "no", "0.03692", "2.205", "0.0108", "0.0140", "no", "yes", "powered", "0.481", "no"],
+    ["momentum_L14d_S3d", "69", "3.241", "3.949", "significant", "0.8988", "1.361 (0.436)", "no", "0.06076", "3.892", "0.0000", "0.0006", "no", "yes", "powered", "0.805", "no"],
+    ["momentum_L1d_S2d", "69", "0.075", "0.069", "not_significant", "0.0288", "0.032 (0.420)", "no", "-0.03388", "-1.491", "0.4724", "0.4459", "no", "no", "powered", "0.010", "no"],
+    ["momentum_L1d_S3d", "69", "3.338", "2.851", "suggestive", "1.0432", "1.402 (0.437)", "no", "0.07494", "2.662", "0.0022", "0.0054", "no", "yes", "powered", "0.870", "no"],
+    ["momentum_L28d_S2d", "69", "0.872", "0.937", "not_significant", "0.2497", "0.366 (0.421)", "no", "0.00329", "0.182", "0.1744", "0.1758", "no", "yes", "powered", "0.060", "no"],
+    ["momentum_L28d_S3d", "69", "1.416", "1.393", "not_significant", "0.3889", "0.595 (0.423)", "no", "0.01942", "1.072", "0.0818", "0.0804", "no", "yes", "powered", "0.142", "no"],
+    ["momentum_L3d_S2d", "69", "2.766", "2.378", "suggestive", "1.0109", "1.161 (0.505)", "yes", "0.04401", "2.116", "0.0087", "0.0192", "no", "no", "powered", "0.653", "no"],
+    ["momentum_L3d_S3d", "69", "4.663", "5.015", "significant", "1.0807", "1.958 (0.452)", "no", "0.08106", "4.743", "0.0000", "0.0002", "no", "yes", "powered", "0.985", "no"],
+    ["momentum_L56d_S2d", "69", "1.217", "0.990", "not_significant", "0.3780", "0.511 (0.522)", "yes", "0.00931", "0.425", "0.1610", "0.1466", "no", "no", "powered", "0.099", "no"],
+    ["momentum_L56d_S3d", "69", "1.075", "0.891", "not_significant", "0.3159", "0.451 (0.513)", "yes", "0.01094", "0.528", "0.1866", "0.1658", "no", "no", "powered", "0.081", "no"],
+    ["momentum_L5d_S2d", "69", "2.508", "2.588", "suggestive", "0.9616", "1.053 (0.429)", "no", "0.04526", "2.060", "0.0048", "0.0108", "yes", "yes", "powered", "0.558", "no"],
+    ["momentum_L5d_S3d", "69", "2.857", "2.660", "suggestive", "0.8167", "1.200 (0.432)", "no", "0.05060", "2.187", "0.0039", "0.0030", "no", "yes", "powered", "0.675", "no"],
+    ["momentum_L7d_S2d", "69", "2.097", "2.327", "suggestive", "0.6428", "0.881 (0.427)", "no", "0.03529", "1.691", "0.0100", "0.0116", "no", "yes", "powered", "0.372", "no"],
+    ["momentum_L7d_S3d", "69", "1.925", "2.102", "suggestive", "0.5245", "0.808 (0.426)", "no", "0.03546", "2.082", "0.0178", "0.0110", "no", "yes", "powered", "0.330", "no"],
 ]
 
 # --- Stage-4 gross/net, IS/OOS (docs/STAGE4_RESULTS.md) ---
@@ -122,8 +123,8 @@ S4_2X_COSTS = [
 S4_LOOKBACK_COLUMNS = ["variant", "net Sharpe", "net ann ret", "note"]
 S4_LOOKBACK = [
     ["momentum_L5d_S1d (chosen)", "0.664", "0.2490", "chosen lookback = 5d"],
-    ["momentum_L2d_S1d (−50%)", "-0.328", "-0.1155", "lookback halved"],
-    ["momentum_L8d_S1d (+50%)", "0.621", "0.2645", "lookback up 50%"],
+    ["momentum_L2d_S1d", "-0.328", "-0.1155", "lookback-50% (skip/quantile unchanged)"],
+    ["momentum_L8d_S1d", "0.621", "0.2645", "lookback+50% (skip/quantile unchanged)"],
 ]
 
 S4_REGIME_COLUMNS = ["regime", "n", "mean net return"]
@@ -373,11 +374,11 @@ def build_document() -> Document:
     prov = doc.add_paragraph()
     prov.alignment = WD_ALIGN_PARAGRAPH.CENTER
     prov_run = prov.add_run(
-        "All numbers in this write-up are quoted verbatim from the committed "
-        "source-of-truth artifacts (docs/report/Artemis_Momentum_Report.md, "
-        "docs/STAGE2_RESULTS.md, docs/STAGE4_RESULTS.md, docs/AUDIT.md, "
-        "docs/specs/2026-05-30-artemis-momentum-design.md). Nothing is "
-        "re-derived or invented."
+        "This write-up is assembled from committed source artifacts. Key "
+        "Stage-2 and Stage-4 tables are embedded as verified literals and "
+        "checked against docs/STAGE2_RESULTS.md and docs/STAGE4_RESULTS.md; "
+        "narrative and universe figures are verified literals from the "
+        "committed docs. No new statistics are computed here."
     )
     prov_run.italic = True
     prov_run.font.size = Pt(8.5)
@@ -544,8 +545,8 @@ def build_document() -> Document:
     )
     doc.add_paragraph(
         "Was there alpha? Only momentum_L5d_S1d has a spanning-alpha t-stat above "
-        "2 (2.206) within the selection family; all other family variants are "
-        "below 1.62 (the next-highest is L7d at 1.614, then L14d at 1.597). There "
+        "2 (2.211) within the selection family; all other family variants are "
+        "below 1.63 (the next-highest is L7d at 1.621, then L14d at 1.605). There "
         "is no robust alpha. Grid-level overfit controls: PBO/CSCV = 0.114 (below "
         "the 0.5 threshold but on a correlated family — Figure 5 shows short "
         "lookbacks cluster tightly, so the effective independent-test count is "
@@ -860,7 +861,7 @@ def validate(path: pathlib.Path) -> dict:
 
     # Spot-check verbatim numbers in cells.
     family_cells = [c.text for row in family_tbl.rows for c in row.cells]
-    for token in ["momentum_L5d_S1d", "2.403", "0.0081", "0.0058", "2.206",
+    for token in ["momentum_L5d_S1d", "2.403", "0.0081", "0.0058", "2.211",
                   "0.460"]:
         assert token in family_cells, f"Expected verbatim token '{token}' " \
             "missing from family table."

@@ -26,10 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import pandas as pd
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from amom.providers.artemis import ArtemisProvider
 from amom.providers.base import ProviderError
+
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------

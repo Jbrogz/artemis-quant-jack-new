@@ -16,10 +16,9 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 # Ensure src/ is on the path for importing the script as a module-like object.
 _SRC = Path(__file__).resolve().parents[1] / "src"

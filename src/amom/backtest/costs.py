@@ -24,6 +24,8 @@ super-linear in order size, which is what drives the capacity estimate (§4.5).
 This function is pure and performs no I/O.
 """
 
+import math
+
 from amom.config import (
     SLIPPAGE_ADV_REF,
     SLIPPAGE_SMALL_BPS,
@@ -59,8 +61,9 @@ def trade_cost(
         traded_notional: signed traded notional for this leg (target − current,
             in the same currency as ``adv``); only its magnitude enters the cost.
         adv: the coin's average daily volume, same currency as the notional. Used
-            as the slippage market-impact denominator. A non-positive ADV yields
-            zero slippage (no impact reference) — only the fee is charged.
+            as the slippage market-impact denominator. A missing, non-finite, or
+            non-positive ADV uses a conservative "unknown liquidity" assumption
+            rather than receiving free market-impact.
         liquidity_rank: 0-based cross-sectional liquidity rank of the coin (0 =
             most liquid). ``rank < SLIPPAGE_TOP_N`` slips at the top tier.
         aum: book size; carried through for the capacity sweep (§4.5) where the
@@ -77,12 +80,17 @@ def trade_cost(
 
     fee = notional * TAKER_FEE_BPS / _BPS
 
-    if adv is None or adv <= 0.0:
-        # No ADV reference -> no market-impact slippage; charge the fee only.
-        return fee
+    adv_value = None if adv is None else float(adv)
+    if adv_value is None or not math.isfinite(adv_value) or adv_value <= 0.0:
+        # No ADV reference is a data-quality problem, not a free fill. Treat the
+        # order as consuming 100% of unknown ADV in the illiquid tier, so the
+        # backtest/capacity estimate is conservative and the gap is visible.
+        order_adv_ratio = 1.0
+        base_bps = float(SLIPPAGE_SMALL_BPS)
+    else:
+        order_adv_ratio = notional / adv_value
+        base_bps = _base_slippage_bps(int(liquidity_rank))
 
-    order_adv_ratio = notional / float(adv)
-    base_bps = _base_slippage_bps(int(liquidity_rank))
     # Linear in the order/ADV ratio, normalized at SLIPPAGE_ADV_REF: at that
     # reference ratio the bps equals base_bps; larger orders scale it up.
     slippage_bps = base_bps * (order_adv_ratio / SLIPPAGE_ADV_REF)

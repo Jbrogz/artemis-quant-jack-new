@@ -1,6 +1,6 @@
 # Artemis Momentum Factor Book — Project STATUS & Handoff
 
-_Last updated: 2026-05-31. Read this FIRST when resuming in a new window._
+_Last updated: 2026-06-02. Read this FIRST when resuming in a new window._
 
 ## What this project is
 A single-factor (**momentum only**) crypto long/short **factor book**, with **all data sourced from Artemis**, following the Project-1 Factor Book Guide methodology **strictly** (`docs/reference/factor-book-guide.md`). Python package `amom`. The competition entry that this replaces (the old `cmom` "momentum sleeve") was deemed junk.
@@ -10,9 +10,9 @@ A single-factor (**momentum only**) crypto long/short **factor book**, with **al
 - **Deliverables (done):** `docs/report/Artemis_Momentum_Report.pdf` (10pp) and `docs/report/Artemis_Momentum_Findings.docx`. No pitch deck (per scope).
 
 ## Current state — COMPLETE through Stage 5 + skip≥2 widened validation (RESOLVED)
-- **250 tests passing.** ~3.2k LOC src + ~5k LOC tests.
+- **254 tests passing, 3 skipped.** ~3.2k LOC src + ~5k LOC tests.
 - Stage 1 universe (SOUND), Stage 1.2–1.4 returns+signal+formation (SOUND), Stage 2 significance (SOUND), Stage 3–4 cost-aware backtest+OOS (SOUND after a remediation), Stage 5 report (SOUND).
-- Every stage was built by a **gated multi-agent workflow** (fresh agent per task, TDD, opus on correctness-critical work + sonnet on mechanical, karpathy-guidelines) and **adversarially verified by a 3-lens review** before the next stage began.
+- 2026-06-02 Codex remediation pass added a competition-readiness plan, stronger OOS-seal tests, a real `make reproduce` chain, report/write-up consistency tests, conservative missing-ADV costs, and missing-return visibility in the backtest equity artifact. The strategy verdict remains **NO-DEPLOY**.
 
 ## The verified finding (pre-registered analysis)
 **Momentum is a rigorous, regime-dependent statistical NULL → NO-DEPLOY.** Pre-registered selection family = the **7 lookbacks at skip=1** (n=69 in-sample, Bonferroni 0.05/7=0.00714). No family variant clears Newey-West (lowest HAC p is L5d=0.0081, *above* threshold). L5d is "suggestive" (HAC t=2.40, spanning α t=2.21) but **fails subsample sign-stability** (holds_sign=False) and only "survives" via the bootstrap override → deployment-disqualified. DSR(L5d)=0.46, grid PBO=0.114. Net of costs: academic L28d works only gross (net −0.031); capacity ~$36M (not binding).
@@ -45,7 +45,8 @@ A single-factor (**momentum only**) crypto long/short **factor book**, with **al
 - **TDD always** (real test → fail → minimal impl → pass → commit). ≥80% coverage. karpathy-guidelines (minimal, surgical, no speculative machinery).
 - **No look-ahead is the cardinal rule.** Every decision for date t uses only data ≤ close t; execution at t+1 close. Tests must be *discriminating* (mutating future data must change nothing at t).
 - **Honest reporting.** Naive t is never the headline (HAC is); underpowered → "inconclusive"; failures are always included; gross-vs-net and IS-vs-OOS shown side by side; never massage toward significance.
-- **Gated workflows:** build via fresh subagents, then a multi-lens adversarial review must return SOUND before proceeding. Model-delegate (opus = correctness/verification, sonnet = mechanical).
+- **Gated workflows:** build via fresh Codex subagents, then a multi-lens adversarial review must return SOUND before proceeding. Use stronger reasoning on correctness-critical work and faster agents on mechanical checks.
+- **Codex workflow note:** this repository is now being remediated with Codex subagents, not Claude/Opus sessions. Preserve the same discipline: TDD, small ownership slices, independent review, and explicit verification.
 - **`.env` is OFF-LIMITS** — never open/cat/grep/print it. Scripts load `ARTEMIS_API_KEY` via `python-dotenv` themselves and print only `len`.
 - **GitHub push gotcha:** the macOS keychain serves a `JB-acap` (work) credential for github.com by default, so a plain `git push` 404s. **Always `gh auth switch -u Jbrogz` immediately before pushing.** The repo's local credential helper is pinned to `gh auth git-credential`.
 
@@ -53,17 +54,18 @@ A single-factor (**momentum only**) crypto long/short **factor book**, with **al
 - `src/amom/` — `config.py` (all frozen params/constants), `providers/` (Artemis client), `cache.py`, `universe/` (registry, coverage, eligibility, builder, recycle), `returns/spot.py`, `factor/` (momentum, portfolio), `stats/` (core, sharpe_se, spanning, bootstrap, subsample, dsr, pbo), `backtest/` (costs, engine, metrics).
 - `scripts/` — `probe_artemis.py`, `build_universe.py`, `build_returns.py`, `build_factor_returns.py`, `run_stage2.py`, `run_backtest.py`, `build_report_figures.py`, `build_report.py`, `build_writeup_docx.py`.
 - `docs/` — `reference/factor-book-guide.md` (authoritative methodology), `specs/2026-05-30-artemis-momentum-design.md` (the spec, rev 3 + Appendix B = live-Artemis facts), `plans/*.md`, `STAGE2_RESULTS.md`, `STAGE4_RESULTS.md`, `AUDIT.md`, `report/`.
-- `Makefile` targets: `probe universe features sleeve` … plus `figures report writeup test`.
+- `Makefile` targets: `probe`, `universe`, `returns`, `factor`, `stage2`, `backtest`, `figures`, `report`, `writeup`, `test`, `lint`, `reproduce`.
 - Data artifacts (`data/`) are **gitignored** and regenerated by the scripts — rebuild before consuming (some on-disk parquet may lag the latest schema).
 
 ## Key Artemis data facts (verified live — spec Appendix B)
 `GET https://data-svc.artemisxyz.com/asset` enumerates ~1013 assets keyed on stable `artemis_id` (≠ ticker). No funding (→ spot returns, no carry). Only `24H_VOLUME` is historical (`30D_VOLUME` is real-time only) and it's noisy → liquidity uses MC + median 24H-vol. DAY granularity only. Catalog is as-of-today → purged-dead-coins unrecoverable (residual survivorship disclosed; 28% of the 846-asset universe show terminal >90% collapses, carried into P&L).
 
 ## Known minor items (non-blocking)
-- `scripts/build_report.py` / `build_writeup_docx.py` embed verified numbers as literals (every value matched the parquet/docs; PDFs/docx are byte-reproducible). Optional: wire them to read live from `data/stats/significance.parquet` + `data/backtest/*`.
+- `scripts/build_report.py` / `build_writeup_docx.py` still embed verified narrative and some table numbers as literals. The PDF reads the full Stage-2 table from `data/stats/significance.parquet`; `tests/test_report_source_consistency.py` checks the highest-risk DOCX Stage-2/Stage-4 tables against `docs/STAGE2_RESULTS.md` and `docs/STAGE4_RESULTS.md`. Optional future work: wire every narrative value directly to regenerated artifacts.
 - A few pre-existing ruff unused-import warnings in some `tests/test_universe_*.py` / `test_cache.py` files (predate this work; left untouched per surgical-change rule).
 
 ## Handoff checklist for the new window
-1. `cd new-artemis-work`; `uv sync`; `uv run pytest -q` (expect 250 passed).
+1. `cd new-artemis-work`; `uv sync`; `uv run pytest -q`; `uv run ruff check src tests scripts`.
 2. Read this STATUS.md (the skip≥2 widened validation is now ✅ RESOLVED — no deployable candidate), then `docs/specs/2026-05-30-artemis-momentum-design.md` (§2, §3, §7) and, for the closed widened analysis, `docs/plans/2026-05-31-skip-variant-validation.md` + the widened sections of `docs/STAGE2_RESULTS.md` / `docs/STAGE4_RESULTS.md`.
-3. There is **no open work item.** The pre-registered skip=1 NULL → NO-DEPLOY is the headline finding and the widened/post-hoc skip≥2 analysis confirms it (no candidate clears costs + OOS + m=21-robustness). Push with `gh auth switch -u Jbrogz` first.
+3. For full live regeneration, run `make reproduce` after confirming `ARTEMIS_API_KEY` is available in the local secret environment. Do not open or inspect `.env*` files.
+4. There is **no open strategy work item.** The pre-registered skip=1 NULL → NO-DEPLOY is the headline finding and the widened/post-hoc skip≥2 analysis confirms it (no candidate clears costs + OOS + m=21-robustness). Push with `gh auth switch -u Jbrogz` first.

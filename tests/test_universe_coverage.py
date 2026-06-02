@@ -5,7 +5,6 @@ Fixtures are fully synthetic and offline; no API calls.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from amom.universe.coverage import first_seen_dates
 

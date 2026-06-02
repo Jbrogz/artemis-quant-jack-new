@@ -21,6 +21,8 @@ Discriminating behaviours (plan §B2):
 All fixtures are synthetic and offline; no API calls, no disk reads.
 """
 
+import math
+
 import pandas as pd
 
 from amom.backtest.costs import trade_cost
@@ -163,6 +165,7 @@ def test_run_backtest_returns_three_artifacts():
     assert isinstance(res["positions"], pd.DataFrame)
     assert isinstance(res["trades"], pd.DataFrame)
     assert len(res["equity"]) >= 1
+    assert "missing_return_count" in res["equity"].columns
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +307,20 @@ def test_costs_reduce_net_below_gross():
     assert net["trades"]["cost"].sum() > 0
 
 
+def test_nan_adv_does_not_poison_costs_or_equity():
+    weights = _simple_weights()
+    returns = _simple_returns()
+    universe = _universe(_REB, _SYMS)
+    universe.loc[universe["symbol"] == "B", "adv_30d"] = math.nan
+
+    res = _run(weights, returns, universe, cost_model=trade_cost)
+
+    assert res["trades"]["cost"].notna().all()
+    assert res["trades"]["cost"].map(math.isfinite).all()
+    assert res["equity"]["equity"].notna().all()
+    assert res["equity"]["equity"].map(math.isfinite).all()
+
+
 # ---------------------------------------------------------------------------
 # a collapsed short-leg coin's crash flows into the book P&L
 # ---------------------------------------------------------------------------
@@ -332,6 +349,18 @@ def test_collapsed_short_leg_crash_flows_to_pnl():
     base_eq = baseline["equity"]["equity"].iloc[1]
     crash_eq = crashed["equity"]["equity"].iloc[1]
     assert crash_eq > base_eq
+
+
+def test_all_missing_return_window_is_counted_in_equity_artifact():
+    weights = _simple_weights()
+    returns = _holding_returns([
+        {"date": ts("2024-02-15"), "symbol": "A", "holding_return": 0.01},
+        {"date": ts("2024-03-15"), "symbol": "A", "holding_return": 0.01},
+        # B is held but has no observed return in either priced window.
+    ])
+    res = _run(weights, returns, _universe(_REB, _SYMS))
+    priced = res["equity"].iloc[1:]
+    assert (priced["missing_return_count"] >= 1).all()
 
 
 # ---------------------------------------------------------------------------

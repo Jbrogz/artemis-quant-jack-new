@@ -21,7 +21,6 @@ import pathlib
 
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
@@ -133,8 +132,6 @@ def fig1_cumulative_pnl():
     eq_is = eq[is_mask].copy()
     eq_oos = eq[oos_mask].copy()
 
-    # Normalise IS to start at 1
-    is_start = eq_is["equity"].iloc[0]
     eq_is["gross_cum"] = eq_is["equity"].apply(
         lambda _: None
     )  # placeholder; reconstruct from returns
@@ -342,8 +339,8 @@ def fig4_variant_sharpe_bar():
 
     bars_fam = ax.bar(x_fam, fam_sharpes, color=fam_colors, edgecolor="white",
                       linewidth=0.5, label="Selection family (skip=1)")
-    bars_diag = ax.bar(x_diag, diag_sharpes, color="#b0b0b0", edgecolor="white",
-                       linewidth=0.5, label="Diagnostics (skip=2,3)")
+    ax.bar(x_diag, diag_sharpes, color="#b0b0b0", edgecolor="white",
+           linewidth=0.5, label="Diagnostics (skip=2,3)")
 
     # Bonferroni threshold line
     ax.axhline(0.0, color="black", linewidth=0.7)

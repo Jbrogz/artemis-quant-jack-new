@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import run_stage2  # noqa: E402
-from amom.config import LOOKBACKS_DAYS, PRIMARY_SKIP_DAYS  # noqa: E402
+from amom.config import LOOKBACKS_DAYS, OOS_START, PRIMARY_SKIP_DAYS  # noqa: E402
 
 
 def _variant(lookback: int, skip: int) -> str:
@@ -182,6 +182,45 @@ def test_build_significance_table_marks_selection_membership():
     assert int(table["in_selection_family"].sum()) == 7
     sel = set(table.loc[table["in_selection_family"], "variant"])
     assert sel == {_variant(lb, PRIMARY_SKIP_DAYS) for lb in LOOKBACKS_DAYS}
+
+
+def test_build_significance_table_seals_oos_rows_before_computing(monkeypatch):
+    # The public table builder must enforce the Stage-2 OOS seal itself. Mutating
+    # rows dated >= OOS_START cannot change the per-variant series handed to the
+    # statistical battery, even if a caller accidentally passes the full panel.
+    variants = [_variant(lb, PRIMARY_SKIP_DAYS) for lb in LOOKBACKS_DAYS]
+    is_date = OOS_START - pd.Timedelta(days=30)
+    rows = []
+    for variant in variants:
+        rows.append(
+            {"variant": variant, "rebalance_date": is_date, "factor_return": 0.01}
+        )
+        rows.append(
+            {"variant": variant, "rebalance_date": OOS_START, "factor_return": 99.0}
+        )
+    factor_returns = pd.DataFrame(rows)
+    regressors = pd.DataFrame(index=pd.DatetimeIndex([is_date]))
+
+    captured_runs: list[dict[str, tuple[pd.Timestamp, ...]]] = []
+
+    def fake_compute_variant_row(variant, returns, regressors):
+        captured_runs[-1][variant] = tuple(returns.index)
+        return {"variant": variant, "reported_p": 0.5}
+
+    monkeypatch.setattr(run_stage2, "compute_variant_row", fake_compute_variant_row)
+
+    for oos_value in (99.0, -999.0):
+        mutated = factor_returns.copy()
+        mutated.loc[mutated["rebalance_date"] >= OOS_START, "factor_return"] = oos_value
+        captured_runs.append({})
+        table = run_stage2.build_significance_table(mutated, regressors)
+        assert len(table) == len(variants)
+
+    assert captured_runs[0] == captured_runs[1]
+    for captured in captured_runs:
+        assert set(captured) == set(variants)
+        for indexes in captured.values():
+            assert indexes == (is_date,)
 
 
 # ---------------------------------------------------------------------------

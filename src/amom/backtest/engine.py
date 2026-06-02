@@ -22,8 +22,9 @@ short of a −90% coin earns +90% * |weight|; survivorship is honored, spec §1.
 
 Outputs (a dict of three frames, all NET of costs unless the cost model is
 frictionless):
-  * ``equity``    — ``[date, equity, gross_return, net_return, cost]`` per window
-                    plus the opening row at ``aum``;
+  * ``equity``    — ``[date, equity, gross_return, net_return, cost,
+                    missing_return_count]`` per window plus the opening row at
+                    ``aum``;
   * ``positions`` — ``[rebalance_date, symbol, weight]`` the executed book;
   * ``trades``    — ``[rebalance_date, symbol, target_weight, prior_weight,
                     traded_weight, traded_notional, cost]``.
@@ -50,7 +51,10 @@ from amom.config import (
 _DAYS_PER_YEAR = 365.0
 _PERIODS_PER_YEAR = _DAYS_PER_YEAR / HOLDING_DAYS
 
-_EQUITY_COLUMNS = ["date", "equity", "gross_return", "net_return", "cost"]
+_EQUITY_COLUMNS = [
+    "date", "equity", "gross_return", "net_return", "cost",
+    "missing_return_count",
+]
 _POSITION_COLUMNS = ["rebalance_date", "symbol", "weight"]
 _TRADE_COLUMNS = [
     "rebalance_date",
@@ -89,13 +93,23 @@ def _window_return(returns_wide: pd.DataFrame, symbol: str, start, end) -> float
     return float((1.0 + window.fillna(0.0)).prod() - 1.0)
 
 
+def _window_has_observation(
+    returns_wide: pd.DataFrame, symbol: str, start, end
+) -> bool:
+    """Whether a held symbol has at least one observed return in ``(start, end]``."""
+    if symbol not in returns_wide.columns:
+        return False
+    mask = (returns_wide.index > start) & (returns_wide.index <= end)
+    return not returns_wide.loc[mask, symbol].dropna().empty
+
+
 def _liquidity_rank_asof(universe_panel: pd.DataFrame, rebalance_date) -> dict:
     """ADV and 0-based liquidity rank per symbol, as-of ``rebalance_date``.
 
     Uses the latest universe row dated ``<= rebalance_date`` (point-in-time, no
     look-ahead). Rank 0 = most liquid (largest ADV). Returns ``{symbol: (adv,
-    rank)}``; symbols absent as-of the date get ``(0.0, large_rank)`` (no ADV
-    reference -> the cost model charges fee only).
+    rank)}``; symbols absent as-of the date get ``(0.0, large_rank)`` and use the
+    cost model's conservative unknown-liquidity fallback.
     """
     asof = universe_panel[universe_panel["date"] <= rebalance_date]
     if asof.empty:
@@ -159,7 +173,7 @@ def run_backtest(
     equity = float(aum)
     equity_rows = [
         {"date": rebal_dates[0], "equity": equity, "gross_return": 0.0,
-         "net_return": 0.0, "cost": 0.0}
+         "net_return": 0.0, "cost": 0.0, "missing_return_count": 0}
     ] if rebal_dates else []
     position_rows: list[dict] = []
     trade_rows: list[dict] = []
@@ -204,7 +218,13 @@ def run_backtest(
             position_rows.append({"rebalance_date": r, "symbol": s, "weight": float(w)})
 
         # --- Price the window (r, next_r]; book return is the weighted P&L. ----
-        coin_rets = {s: _window_return(returns_wide, s, r, next_r) for s in target.index}
+        missing_returns = [
+            s for s in target.index
+            if not _window_has_observation(returns_wide, s, r, next_r)
+        ]
+        coin_rets = {
+            s: _window_return(returns_wide, s, r, next_r) for s in target.index
+        }
         gross_return = float(sum(target[s] * coin_rets[s] for s in target.index))
 
         cost_drag = period_cost / equity if equity != 0 else 0.0
@@ -215,6 +235,7 @@ def run_backtest(
         equity_rows.append({
             "date": next_r, "equity": equity, "gross_return": gross_return,
             "net_return": net_return, "cost": period_cost,
+            "missing_return_count": len(missing_returns),
         })
 
         # --- Drift the executed book by realized P&L -> prior book at next_r. --

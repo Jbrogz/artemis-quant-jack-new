@@ -159,6 +159,79 @@ def test_oos_panels_read_in_one_guarded_call_covers_returns_and_universe():
         rb.read_oos_panels_once(book, returns, universe, guard)
 
 
+def test_oos_weight_inputs_open_guard_before_building_variant_books(monkeypatch):
+    # The OOS path must own BOTH the OOS read and the OOS weight-book formation.
+    # This pins the ordering directly: every variant book builder sees the guard
+    # already opened, and it is asked to form only rows >= OOS_START.
+    guard = rb.OneShotOOS()
+    built: list[str] = []
+
+    def fake_build_weight_book(price_panel, eligibility_input, spec, **kwargs):
+        assert guard.opened
+        assert kwargs["start"] == OOS_START
+        built.append(spec["variant"])
+        return pd.DataFrame(
+            {
+                "rebalance_date": [OOS_START],
+                "symbol": ["A"],
+                "weight": [1.0],
+            }
+        )
+
+    monkeypatch.setattr(rb, "build_weight_book", fake_build_weight_book)
+
+    returns = pd.DataFrame(
+        {
+            "date": [ts("2023-11-15"), ts("2023-12-15")],
+            "symbol": ["A", "A"],
+            "holding_return": [0.01, 0.02],
+        }
+    )
+    universe = pd.DataFrame(
+        {
+            "date": [ts("2023-11-15"), ts("2023-12-15")],
+            "symbol": ["A", "A"],
+            "adv_30d": [1e9, 1e9],
+        }
+    )
+
+    oos_book, oos_returns, oos_universe = rb.build_oos_weight_inputs_once(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        returns,
+        universe,
+        {"primary": rb.PRIMARY_SPEC, "comparator": rb.COMPARATOR_SPEC},
+        guard,
+        widened_specs=rb.WIDENED_CANDIDATES[:2],
+    )
+
+    assert guard.open_count == 1
+    assert set(built) == {
+        rb.PRIMARY_SPEC["variant"],
+        rb.COMPARATOR_SPEC["variant"],
+        rb.WIDENED_CANDIDATES[0]["variant"],
+        rb.WIDENED_CANDIDATES[1]["variant"],
+    }
+    assert set(oos_book["_spec"]) == {
+        "primary",
+        "comparator",
+        f"widened::{rb.WIDENED_CANDIDATES[0]['variant']}",
+        f"widened::{rb.WIDENED_CANDIDATES[1]['variant']}",
+    }
+    assert (oos_book["rebalance_date"] >= OOS_START).all()
+    assert (oos_returns["date"] >= OOS_START).all()
+    assert (oos_universe["date"] >= OOS_START).all()
+    with pytest.raises(RuntimeError):
+        rb.build_oos_weight_inputs_once(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            returns,
+            universe,
+            {"primary": rb.PRIMARY_SPEC},
+            guard,
+        )
+
+
 def test_in_sample_slice_never_touches_oos_rows():
     df = pd.DataFrame(
         {

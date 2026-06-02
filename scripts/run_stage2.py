@@ -317,7 +317,8 @@ def build_significance_table(
 
     Args:
         factor_returns: long ``[variant, rebalance_date, factor_return, ...]``
-            frame (already sliced to the in-sample window by the caller).
+            frame. Rows dated ``>= OOS_START`` are discarded defensively here, so
+            callers cannot leak the sealed OOS window into the Stage-2 battery.
         regressors: spanning regressors indexed by rebalance date.
 
     Returns:
@@ -325,6 +326,12 @@ def build_significance_table(
         the Bonferroni-corrected ``survives_bonferroni`` flag on the selection
         family (always False for diagnostics).
     """
+    factor_returns = factor_returns.copy()
+    factor_returns["rebalance_date"] = pd.to_datetime(
+        factor_returns["rebalance_date"]
+    ).dt.normalize()
+    factor_returns = in_sample(factor_returns)
+
     variants = sorted(factor_returns["variant"].unique())
     family = set(selection_family(variants))
 

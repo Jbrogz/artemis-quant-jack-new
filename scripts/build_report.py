@@ -6,15 +6,11 @@ momentum study:
 
     docs/report/Artemis_Momentum_Report.pdf
 
-Pure-Python via reportlab (no system-lib dependencies). It embeds the RPT1
-figures (with their takeaway captions), the full Stage-2 variant table
-(INCLUDING failures, all 21 variants), the Stage-4 gross-vs-net and
-IS-vs-OOS tables plus robustness, and the required-disclosures appendix.
-
-ALL numbers are pulled VERBATIM from the committed source-of-truth artifacts:
-  docs/STAGE2_RESULTS.md, docs/STAGE4_RESULTS.md, docs/AUDIT.md
-  data/stats/significance.parquet
-Nothing is re-derived or invented.
+Pure-Python via reportlab (no system-lib dependencies). It reads the full
+Stage-2 variant table from data/stats/significance.parquet at build time and
+embeds verified literal narrative, Stage-4, audit, and disclosure values from
+the committed source docs. It is a deterministic presentation build, not a new
+statistical computation.
 
 Run:  uv run python scripts/build_report.py
 """
@@ -257,6 +253,10 @@ def build():
         P("Research Report &mdash; Stage 5 Deliverable", H_SUB),
         P("Date: 2026-05-30 &nbsp;|&nbsp; Spot long/short, Artemis-sourced universe "
           "&nbsp;|&nbsp; Survivorship-corrected, cost-aware, sealed out-of-sample", H_SUB),
+        P("Provenance: the full Stage-2 table is read from "
+          "<font face='Courier'>data/stats/significance.parquet</font>; narrative, "
+          "Stage-4, audit, and disclosure values are verified literals from the committed "
+          "source docs. This build does not recompute statistics.", H_SUB),
         verdict_banner(),
         Spacer(1, 12),
         P("1. Conclusion first", H1),
@@ -345,7 +345,7 @@ def build():
           "Sharpes (L3d/S3d HAC t &asymp; 5.0, L14d/S3d HAC t &asymp; 3.9) are <b>not</b> in the "
           "selection family. The full numeric table for all 21 variants is in the Appendix (7.3).", BODY),
         bullet("<font face='Courier'>L5d/S1d</font> (strongest): HAC t = 2.403, HAC p = 0.0081 "
-               "(&gt; 0.00714), bootstrap p = 0.0058, suggestive, span &alpha; t = 2.206, "
+               "(&gt; 0.00714), bootstrap p = 0.0058, suggestive, span &alpha; t = 2.211, "
                "DSR = 0.460. <b>Survives Bonferroni only via the bootstrap override, and holds_sign "
                "= NO &mdash; DISQUALIFIED.</b>"),
         bullet("<font face='Courier'>L7d/S1d</font>: HAC t = 1.887, p = 0.0296 &mdash; not "
@@ -411,8 +411,8 @@ def build():
     look_header = ["variant", "net Sharpe", "net ann ret", "note"]
     look_rows = [
         ["momentum_L5d_S1d (chosen)", "0.664", "0.2490", "chosen lookback = 5d"],
-        ["momentum_L2d_S1d (-50%)", "-0.328", "-0.1155", "lookback halved — net-negative"],
-        ["momentum_L8d_S1d (+50%)", "0.621", "0.2645", "lookback up 50%"],
+        ["momentum_L2d_S1d", "-0.328", "-0.1155", "lookback-50% (skip/quantile unchanged)"],
+        ["momentum_L8d_S1d", "0.621", "0.2645", "lookback+50% (skip/quantile unchanged)"],
     ]
     look_w = [w * inch for w in [2.3, 1.0, 1.0, 2.4]]
     story += [

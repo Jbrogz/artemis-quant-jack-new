@@ -2,10 +2,10 @@
 
 _Date: 2026-05-30. Status: final deliverable (Stage 5). Verdict: **NO-DEPLOY.**_
 
-_All numbers in this report are quoted verbatim from the committed source-of-truth artifacts
-(`docs/STAGE2_RESULTS.md`, `docs/STAGE4_RESULTS.md`, `docs/AUDIT.md`) and the parquet outputs
-(`data/stats/significance.parquet`, `data/backtest/{equity,positions,trades}.parquet`). The
-PDF is regenerated deterministically by `uv run python scripts/build_report.py`._
+_This report is assembled from committed source artifacts. Key Stage-2 and Stage-4 values are
+verified against `docs/STAGE2_RESULTS.md`, `docs/STAGE4_RESULTS.md`, `docs/AUDIT.md`, and the
+parquet outputs (`data/stats/significance.parquet`, `data/backtest/{equity,positions,trades}.parquet`).
+The PDF is regenerated deterministically by `uv run python scripts/build_report.py`._
 
 ---
 
@@ -106,7 +106,7 @@ summary is rendered as a table in the PDF.)_
 Key reads:
 
 - **`momentum_L5d_S1d` (strongest):** HAC t = 2.403, HAC p = 0.0081 (> 0.00714), bootstrap p =
-  0.0058, HLZ = suggestive, spanning alpha t = 2.206, DSR = 0.460. **Survives Bonferroni only via
+  0.0058, HLZ = suggestive, spanning alpha t = 2.211, DSR = 0.460. **Survives Bonferroni only via
   the bootstrap override, and `holds_sign = no` — DISQUALIFIED** by the §2.6 sign-stability gate.
 - **`momentum_L7d_S1d`:** HAC t = 1.887, HAC p = 0.0296 — not significant.
 - **`momentum_L14d_S1d`:** HAC t = 1.945, HAC p = 0.0259 — not significant.

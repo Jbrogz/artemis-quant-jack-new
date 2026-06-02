@@ -117,6 +117,22 @@ def test_slippage_at_reference_ratio_equals_base_bps():
     assert math.isclose(slip, _REF_NOTIONAL * SLIPPAGE_TOP_BPS / 1e4, rel_tol=1e-12)
 
 
+def test_missing_adv_charges_conservative_illiquid_slippage():
+    # Missing/non-positive ADV is not a free market-impact fill. It uses the
+    # illiquid tier with a conservative unknown-liquidity ratio.
+    fee_only = _fee(_REF_NOTIONAL)
+    expected_slip = (
+        _REF_NOTIONAL
+        * (SLIPPAGE_SMALL_BPS * (1.0 / SLIPPAGE_ADV_REF))
+        / 1e4
+    )
+    for adv in (None, 0.0, -1.0, math.nan):
+        missing = trade_cost(_REF_NOTIONAL, adv=adv, liquidity_rank=0, aum=1e6)
+        assert math.isfinite(missing)
+        assert missing > fee_only
+        assert math.isclose(missing, fee_only + expected_slip, rel_tol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # no funding term (spot) — cost is purely fee + slippage, both >= 0
 # ---------------------------------------------------------------------------
