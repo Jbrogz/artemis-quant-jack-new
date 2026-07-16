@@ -3,9 +3,9 @@
 _Last updated: 2026-05-31. Read this FIRST when resuming in a new window._
 
 ## What this project is
-A single-factor (**momentum only**) crypto long/short **factor book**, with **all data sourced from Artemis**, following the Project-1 Factor Book Guide methodology **strictly**. Python package `amom`. The competition entry that this replaces (the old `cmom` "momentum sleeve") was deemed junk.
+A single-factor (**momentum only**) crypto long/short **factor book**, with **all data sourced from Artemis**, following the pre-registered methodology in `docs/specs/2026-05-30-artemis-momentum-design.md` **strictly**. Python package `amom`. The competition entry that this replaces (the old `cmom` "momentum sleeve") was deemed junk.
 
-- **Repo:** `github.com/Jbrogz/artemis-quant-jack-new` (private, personal account `Jbrogz`).
+- **Repo:** `github.com/Jbrogz/artemis-quant-jack-new` (public, personal account `Jbrogz`).
 - **Local:** `/Users/jackbrogan/Desktop/artemis-quant-joint/new-artemis-work` (separate git repo, nested in the `artemis-quant-joint` working dir which gitignores it).
 - **Deliverables (done):** `docs/report/Artemis_Momentum_Report.pdf` (10pp) and `docs/report/Artemis_Momentum_Findings.docx`. No pitch deck (per scope).
 
@@ -45,7 +45,7 @@ At the **m=21 Bonferroni threshold (0.05/21=0.00238)**: **L3d/S3d, L14d/S3d, L1d
 - **Honest reporting.** Naive t is never the headline (HAC is); underpowered → "inconclusive"; failures are always included; gross-vs-net and IS-vs-OOS shown side by side; never massage toward significance.
 - **Gated workflows:** build via fresh subagents, then a multi-lens adversarial review must return SOUND before proceeding. Model-delegate (opus = correctness/verification, sonnet = mechanical).
 - **`.env` is OFF-LIMITS** — never open/cat/grep/print it. Scripts load `ARTEMIS_API_KEY` via `python-dotenv` themselves and print only `len`.
-- **GitHub push gotcha:** the macOS keychain serves a `JB-acap` (work) credential for github.com by default, so a plain `git push` 404s. **Always `gh auth switch -u Jbrogz` immediately before pushing.** The repo's local credential helper is pinned to `gh auth git-credential`.
+- **GitHub push gotcha:** the macOS keychain may serve a different github.com credential by default, so a plain `git push` can 404. **Always `gh auth switch -u Jbrogz` immediately before pushing.** The repo's local credential helper is pinned to `gh auth git-credential`.
 
 ## Repo map
 - `src/amom/` — `config.py` (all frozen params/constants), `providers/` (Artemis client), `cache.py`, `universe/` (registry, coverage, eligibility, builder, recycle), `returns/spot.py`, `factor/` (momentum, portfolio), `stats/` (core, sharpe_se, spanning, bootstrap, subsample, dsr, pbo), `backtest/` (costs, engine, metrics).
