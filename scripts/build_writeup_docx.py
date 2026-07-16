@@ -345,7 +345,7 @@ def build_document() -> Document:
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta_run = meta.add_run(
         "Date: 2026-05-30  |  Status: final deliverable (Stage 5)  |  "
-        "Methodology: Project 1 Factor Book Guide"
+        "Methodology: private factor-book methodology guide"
     )
     meta_run.font.size = Pt(10)
     meta_run.font.color.rgb = GREY
@@ -448,7 +448,7 @@ def build_document() -> Document:
          "is built solely as a test-only regressor inside the Stage-2.4 spanning "
          "regression — it is never formed as a portfolio, never deployed."),
         ("Data source: ",
-         "all data sourced from Artemis. The study follows the Project 1 Factor "
+         "all data sourced from Artemis. The study follows a private factor-book "
          "Book Guide methodology strictly, differing only where the data source "
          "forces it; every such deviation is disclosed (Section 10)."),
     ])
@@ -768,7 +768,7 @@ def build_document() -> Document:
         "(probability of backtest overfitting).",
         "Politis & Romano — the stationary block bootstrap (implemented via "
         "the arch library), the bootstrap of record.",
-        "Project 1 Factor Book Guide — authoritative construction, "
+        "Private factor-book methodology guide — authoritative construction, "
         "significance, deployment, and backtest methodology.",
     ])
 

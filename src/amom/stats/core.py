@@ -1,6 +1,6 @@
 """Pure statistical functions for factor evaluation.
 
-Ported verbatim from Project 1 ``factor_eval/stats.py`` (guide §2.1-§2.5).
+Ported verbatim from the author's earlier ``factor_eval/stats.py`` (guide §2.1-§2.5).
 Only the module docstring and provenance note differ; the numerics are
 unchanged so the §2.2 statsmodels equivalence carries over identically.
 """

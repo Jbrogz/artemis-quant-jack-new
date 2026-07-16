@@ -1,6 +1,6 @@
 """Probability of Backtest Overfitting via CSCV (Lopez de Prado, 2015).
 
-Ported verbatim from Project 1 ``cmom/overfitting/pbo.py``.
+Ported verbatim from the author's earlier ``cmom/overfitting/pbo.py``.
 
 Combinatorially-symmetric cross-validation splits the backtest into S equal
 blocks, forms every way of choosing S/2 blocks as in-sample (the rest

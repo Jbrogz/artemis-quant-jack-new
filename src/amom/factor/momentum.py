@@ -4,7 +4,7 @@ The momentum signal is a **trailing return over a fixed ``lookback_days`` window
 skipping the most recent ``skip_days``** — the academic convention that skips the
 recent days to avoid contaminating the trend with short-term reversal. It is
 built from daily price returns as a **log-sum** (log returns are the convention
-for compounding a series through time; spec §1.2/§1.3). Ported from Project 1
+for compounding a series through time; spec §1.2/§1.3). Ported from the author's earlier
 ``factors/momentum.py`` with the funding term irrelevant by construction: a
 momentum signal is a price-trajectory predictor, never a holding cost.
 

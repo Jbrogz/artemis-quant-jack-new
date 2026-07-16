@@ -2,7 +2,7 @@
 
 Stage-2 conventions (spec §2.0 / §2.3). These are the autocorrelation-aware
 additions on top of the ported ``stats.core`` HAC machinery; they are NEW (no
-counterpart in the Project 1 ``factor_eval.stats``).
+counterpart in the earlier ``factor_eval.stats``).
 
 * ``maxlags_for`` -- the HAC bandwidth must cover holding-period overlap, not
   just satisfy the asymptotic ``T**0.25`` rate, or the Newey-West SE

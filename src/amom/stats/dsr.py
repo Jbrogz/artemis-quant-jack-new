@@ -1,6 +1,6 @@
 """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014).
 
-Ported verbatim from Project 1 ``cmom/overfitting/dsr.py``.
+Ported verbatim from the author's earlier ``cmom/overfitting/dsr.py``.
 
 The DSR corrects an observed Sharpe ratio for (a) the number of strategy
 configurations tried during research and (b) non-normal returns. It returns

@@ -1,7 +1,7 @@
 # Artemis Momentum Factor Book — Design Spec
 
 _Date: 2026-05-30. Status: rev 3 — universe corrected after live-Artemis verification (Appendix B)._
-_Authoritative methodology: the Project 1 Factor Book Guide. This rev incorporates an adversarial_
+_Authoritative methodology: a private factor-book methodology guide (the author's prior work). This rev incorporates an adversarial_
 _vetting pass against that methodology — see Appendix A for the findings and their resolutions._
 
 ---
@@ -14,10 +14,9 @@ Determine, with full statistical rigor and **net of realistic trading costs**, w
 
 The null hypothesis for every test is **a true mean factor return of zero**. We build the
 machinery to find the truth and report whatever it shows. If momentum is insignificant
-(as on the Hyperliquid sample in Project 1: HAC t ≈ 0.28, 0/105 survivors under
-multiple-testing correction, regime-dependent), **that honest null is the deliverable.**
+(as in the author's prior private research), **that honest null is the deliverable.**
 
-This project follows the Project 1 Factor Book Guide **strictly**, including all anti-bias
+This project follows that private factor-book methodology guide **strictly**, including all anti-bias
 and anti-look-ahead requirements. It differs from the guide only where the data source forces
 it, and every such difference is documented (Section 3).
 
@@ -142,7 +141,7 @@ confirm continuity. Where Artemis already separates twins (`lunc`→`terra` clas
 - **Skip is a nuisance parameter fixed by convention: `PRIMARY_SKIP_DAYS = 1`.** Skips
   {2, 3} are run only as a **separately-reported robustness check**, not as a selection axis.
 - Signal = log-sum compounding of daily price returns over the lookback, shifted by the skip.
-  Ported from Project 1 `momentum.py`.
+  Ported from the author's earlier `momentum.py`.
 
 **1.4 Portfolio formation (guide §1.4).**
 - Sort the eligible universe by signal into **quintiles** (top/bottom 20%). Long top, short
@@ -327,8 +326,8 @@ new-artemis-work/
 | `src/cmom/` | `cache.py` | `src/amom/cache.py` | none |
 | `src/cmom/config.py` | Artemis URL, market metric list, `STABLECOINS`+`WRAPPED` exclusion sets | `src/amom/config.py` | momentum-only params added |
 | `src/cmom/overfitting/` | `dsr.py`, `pbo.py`, `bootstrap.py` | `src/amom/stats/` | `bootstrap.py` = cross-check only; `arch` is record |
-| `Project 1/.../factor-eval/src/factor_eval/` | `stats.py`, `types.py`, `evaluator.py` | `src/amom/stats/`, `src/amom/factor/` | extend stats (Lo SE, spanning, maxlags rule) |
-| `Project 1/.../factor-eval/factors/` | `momentum.py`, `momentum_portfolio.py` | `src/amom/factor/` | **strip funding**; source from Artemis panels; t+1-close lag |
+| earlier private factor-eval `src/factor_eval/` | `stats.py`, `types.py`, `evaluator.py` | `src/amom/stats/`, `src/amom/factor/` | extend stats (Lo SE, spanning, maxlags rule) |
+| earlier private factor-eval `factors/` | `momentum.py`, `momentum_portfolio.py` | `src/amom/factor/` | **strip funding**; source from Artemis panels; t+1-close lag |
 
 The "junk" sleeve modules (`src/cmom/sleeve/*`) are **not** copied. The stablecoin/wrapped
 exclusion comes from the ported `STABLECOINS | WRAPPED` sets in `cmom/config.py`.
@@ -405,7 +404,7 @@ never opens `.env`).
 
 ## Appendix A — Vetting record (rev 1 → rev 2)
 
-Rev 1 was reviewed by an adversarial methodology agent against the Project 1 Factor Book Guide methodology.
+Rev 1 was reviewed by an adversarial methodology agent against the factor-book methodology guide.
 Verdict: **FAITHFUL_WITH_FIXES**. The anti-bias core (survivorship, point-in-time, look-ahead-
 in-code, OOS-up-front, bootstrap-overrides-NW, reporting honesty) was confirmed faithful with
 real tests. Resolutions folded into rev 2:

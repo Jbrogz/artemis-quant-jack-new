@@ -4,7 +4,7 @@ The signal is a trailing return over a fixed ``lookback_days`` window, **skippin
 the most recent ``skip_days``** — the academic momentum convention (skip the
 recent days to avoid short-term reversal). It is built from daily price returns
 as a **log-sum** (log returns compound a series through time; spec §1.2 / §1.3),
-ported from Project 1 ``factors/momentum.py`` (funding never enters the signal —
+ported from the author's earlier ``factors/momentum.py`` (funding never enters the signal —
 a momentum signal is a price-trajectory predictor).
 
 The cardinal rule asserted here is **no look-ahead**: the signal at date ``t``

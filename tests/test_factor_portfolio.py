@@ -1,6 +1,6 @@
 """Tests for dollar-neutral momentum long/short formation (Task S2, spec §1.4).
 
-Formation ports Project 1 ``momentum_portfolio.py`` with **funding stripped**:
+Formation ports the author's earlier ``momentum_portfolio.py`` with **funding stripped**:
 the factor P&L is driven by the spot ``holding_return`` panel (Task S0), never a
 funding-adjusted return (Artemis is spot-only; spec §3.1).
 

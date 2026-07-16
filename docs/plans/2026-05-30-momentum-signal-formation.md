@@ -4,7 +4,7 @@
 
 **Goal:** Produce a clean dollar-neutral long/short **factor-return series for each momentum variant**, with no look-ahead, on the sound Artemis universe + spot returns — ready for the Stage-2 significance battery.
 
-**References (read first):** `docs/specs/2026-05-30-artemis-momentum-design.md` §4 Stage 1.2–1.4, §3.1–3.2, §7. Reference implementations to PORT (parent repo, strip funding): `../Project 1/factor-book-jack/factor-eval/factors/momentum.py` (signal) and `.../momentum_portfolio.py` (formation). Existing in-repo: `src/amom/universe/builder.py` (eligibility panel), `src/amom/returns/spot.py` (holding returns).
+**References (read first):** `docs/specs/2026-05-30-artemis-momentum-design.md` §4 Stage 1.2–1.4, §3.1–3.2, §7. Reference implementations to PORT (author's earlier private factor-eval work, strip funding): `factors/momentum.py` (signal) and `factors/momentum_portfolio.py` (formation). Existing in-repo: `src/amom/universe/builder.py` (eligibility panel), `src/amom/returns/spot.py` (holding returns).
 
 **Hard rules:** TDD (real test → fail → minimal impl → pass → commit). Never open/print `.env`. One-line commits, no Co-Authored-By. No stubs/placeholders. Match existing `amom` style.
 

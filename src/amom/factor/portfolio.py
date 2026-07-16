@@ -1,6 +1,6 @@
 """Dollar-neutral momentum long/short formation (Task S2, spec §1.4).
 
-Ported from Project 1 ``factors/momentum_portfolio.py`` with **funding stripped**:
+Ported from the author's earlier ``factors/momentum_portfolio.py`` with **funding stripped**:
 the factor P&L is driven by the spot ``holding_return`` panel (Task S0, spec §3.1),
 never a funding-adjusted return. Artemis serves no funding and this is a spot book.
 
