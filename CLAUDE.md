@@ -14,5 +14,5 @@ Complete through Stage 5, every stage adversarially verified SOUND, 250 tests pa
 - **No look-ahead** is the cardinal rule (decision at t uses only data ≤ close t; execute t+1 close; tests must be discriminating).
 - **TDD** (real test → fail → minimal impl → pass → commit), karpathy-guidelines, honest reporting (HAC not naive; failures included; gross-vs-net & IS-vs-OOS side by side; never massage toward significance).
 - Build via **gated multi-agent workflows** + 3-lens adversarial verification to SOUND before proceeding; model-delegate (opus = correctness/verification, sonnet = mechanical).
-- **Push gotcha:** run `gh auth switch -u Jbrogz` before every `git push` (macOS keychain serves a `JB-acap` credential → plain push 404s).
+- **Push gotcha:** run `gh auth switch -u Jbrogz` before every `git push` (the macOS keychain may serve a different credential → plain push 404s).
 - Commits: one-line, no Co-Authored-By trailer. Python via `uv`.

@@ -48,7 +48,7 @@ A single-factor (**momentum only**) crypto long/short **factor book**, with **al
 - **Gated workflows:** build via fresh Codex subagents, then a multi-lens adversarial review must return SOUND before proceeding. Use stronger reasoning on correctness-critical work and faster agents on mechanical checks.
 - **Codex workflow note:** this repository is now being remediated with Codex subagents, not Claude/Opus sessions. Preserve the same discipline: TDD, small ownership slices, independent review, and explicit verification.
 - **`.env` is OFF-LIMITS** — never open/cat/grep/print it. Scripts load `ARTEMIS_API_KEY` via `python-dotenv` themselves and print only `len`.
-- **GitHub push gotcha:** the macOS keychain serves a `JB-acap` (work) credential for github.com by default, so a plain `git push` 404s. **Always `gh auth switch -u Jbrogz` immediately before pushing.** The repo's local credential helper is pinned to `gh auth git-credential`.
+- **GitHub push gotcha:** the macOS keychain may serve a different github.com credential by default, so a plain `git push` can 404. **Always `gh auth switch -u Jbrogz` immediately before pushing.** The repo's local credential helper is pinned to `gh auth git-credential`.
 
 ## Repo map
 - `src/amom/` — `config.py` (all frozen params/constants), `providers/` (Artemis client), `cache.py`, `universe/` (registry, coverage, eligibility, builder, recycle), `returns/spot.py`, `factor/` (momentum, portfolio), `stats/` (core, sharpe_se, spanning, bootstrap, subsample, dsr, pbo), `backtest/` (costs, engine, metrics).
