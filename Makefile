@@ -16,4 +16,4 @@ writeup:
 	uv run python scripts/build_writeup_docx.py
 
 test:
-	uv run pytest -q
+	uv run --extra dev pytest -q
