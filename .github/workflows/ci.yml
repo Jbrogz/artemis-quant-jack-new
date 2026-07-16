@@ -1,0 +1,35 @@
+name: ci
+
+# Runs the keyless test suite on every push / PR to main.
+# References NO secrets: the 3 live-Artemis integration tests self-skip
+# without ARTEMIS_API_KEY, so CI expects 223 passed, 3 skipped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python (pinned by .python-version)
+        run: uv python install
+
+      - name: Sync dependencies (with dev extra)
+        run: uv sync --extra dev
+
+      - name: Run tests
+        run: uv run --extra dev pytest -q
